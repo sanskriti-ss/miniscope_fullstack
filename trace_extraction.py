@@ -14,7 +14,7 @@ MIN_AREA = 600
 MAX_AREA = 50_000
 
 # for moving blobs
-ROI_DILATION_RADIUS = 200  # in pixels, adjust as needed
+ROI_DILATION_RADIUS = 100  # in pixels, adjust as needed
 
 
 # F0 settings
@@ -264,7 +264,35 @@ def save_roi_overlay_image(
 
     cv2.imwrite(out_path, overlay)
     print(f"Saved ROI overlay image to {out_path}")
-    
+
+# for saving the peaks image
+def save_trace_plot(df, out_path="fluorescence_traces_plot.png"):
+    """
+    Plots all FF0 traces in the dataframe and saves as a PNG.
+    """
+    import matplotlib.pyplot as plt
+
+    roi_cols = [c for c in df.columns if c.startswith("FF0_roi")]
+
+    if len(roi_cols) == 0:
+        raise ValueError("No FF0 columns found in dataframe")
+
+    plt.figure(figsize=(10, 5))
+
+    for col in roi_cols:
+        plt.plot(df["time_s"], df[col], label=col)
+
+    plt.xlabel("Time (s)")
+    plt.ylabel("F/F0")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig(out_path, dpi=300)
+    plt.close()  # prevents display in some environments
+
+    print(f"Saved trace plot to {out_path}")
+
+
 ################################################
 ### main function
 ################################################ 
@@ -305,6 +333,10 @@ def main():
 
     # 5. Compute F/F0
     df = normalize_traces_FF0(df, F0_MODE, F0_PERCENTILE, F0_FIRST_N)
+    
+    # and save the image
+    save_trace_plot(df, out_path="fluorescence_traces_plot.png")
+
 
     # 6. Plot F/F0 vs time
     plt.figure()
