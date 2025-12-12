@@ -9,7 +9,10 @@ python main.py
 
 python main.py will do the following:
 1) run trace_extraction, which will give you the peak plots + ROIs annotated on the first frame for verification
-2) give you plots (decay 90, etc) from the data
+2) give you plots (decay 90, etc) from the data (still in progress)
+
+Main to-dos:
+* add mechanical contractility modules after validating the data files.
 
 
 
