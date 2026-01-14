@@ -2,16 +2,19 @@ import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter, butter, filtfilt
+from scipy.ndimage import uniform_filter1d
+import re
 
-VIDEO_PATH = "input.mp4"
+VIDEO_PATH = "3.avi"
 
 # Reference projection settings
 N_REF_FRAMES = 20          # how many initial frames to use for ROI detection
 USE_MAX_PROJECTION = False   # if False, uses mean projection
 
 # ROI filtering params (pixels)
-MIN_AREA = 600
-MAX_AREA = 50_000
+MIN_AREA = 60
+MAX_AREA = 500
 
 # for moving blobs
 ROI_DILATION_RADIUS = 100  # in pixels, adjust as needed
@@ -265,6 +268,66 @@ def save_roi_overlay_image(
     cv2.imwrite(out_path, overlay)
     print(f"Saved ROI overlay image to {out_path}")
 
+def smooth_traces(df, window_length=21, polyorder=3, additional_smoothing=True):
+    """
+    Smooth fluorescence traces using Savitzky-Golay filter with enhanced noise reduction.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe containing time series data with FF0_roi columns
+    window_length : int
+        Length of the filter window (must be odd and >= polyorder + 1)
+        Increased default for noisy data
+    polyorder : int
+        Order of the polynomial used to fit the samples
+    additional_smoothing : bool
+        If True, applies additional moving average for very noisy data
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with added smoothed columns (FF0_roi_smooth)
+    """
+    df_smoothed = df.copy()
+    # Look for FF0_roi columns that don't already have "_smooth" suffix
+    roi_cols = [c for c in df.columns if c.startswith("FF0_roi") and "_smooth" not in c]
+    
+    print(f"Found columns to smooth: {roi_cols}")
+    
+    for col in roi_cols:
+        data = df[col].values
+        # Handle NaN values
+        mask = ~np.isnan(data)
+        
+        if np.sum(mask) < window_length:
+            # Not enough valid points, reduce window length
+            reduced_window = min(window_length, np.sum(mask))
+            if reduced_window < 3:
+                df_smoothed[f"{col}_smooth"] = data
+                continue
+            # Make sure window length is odd
+            if reduced_window % 2 == 0:
+                reduced_window -= 1
+            window_length = max(3, reduced_window)
+        
+        # Apply Savitzky-Golay filter (only on valid points)
+        smoothed = data.copy()
+        
+        if np.sum(mask) >= window_length:
+            # First pass: Savitzky-Golay filter
+            smoothed[mask] = savgol_filter(data[mask], window_length, polyorder)
+            
+            # Second pass: Additional smoothing for very noisy data
+            if additional_smoothing:
+                # Apply a light moving average to further reduce noise
+                smoothed[mask] = uniform_filter1d(smoothed[mask], size=5, mode='nearest')
+        
+        df_smoothed[f"{col}_smooth"] = smoothed
+    
+    return df_smoothed
+
+
 # for saving the peaks image
 def save_trace_plot(df, out_path="fluorescence_traces_plot.png"):
     """
@@ -291,6 +354,118 @@ def save_trace_plot(df, out_path="fluorescence_traces_plot.png"):
     plt.close()  # prevents display in some environments
 
     print(f"Saved trace plot to {out_path}")
+
+
+def save_smoothed_trace_plot(df, out_path="fluorescence_traces_plot_smoothed.png"):
+    """
+    Plots all smoothed FF0 traces in the dataframe and saves as a PNG.
+    """
+    print(f"Available columns: {df.columns.tolist()}")
+    roi_cols = [c for c in df.columns if "FF0_roi" in c and "_smooth" in c]
+    print(f"Found smoothed columns: {roi_cols}")
+
+    if len(roi_cols) == 0:
+        raise ValueError("No smoothed FF0 columns found in dataframe")
+
+    plt.figure(figsize=(10, 5))
+
+    for col in roi_cols:
+        label = col.replace("_smooth", "")
+        plt.plot(df["time_s"], df[col], label=label, linewidth=2)
+
+    plt.xlabel("Time (s)")
+    plt.ylabel("F/F0 (Smoothed)")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig(out_path, dpi=300)
+    plt.close()  # prevents display in some environments
+
+    print(f"Saved smoothed trace plot to {out_path}")
+
+
+def extract_wave_component(df, fps, low_freq=0.1, high_freq=2.0, order=3):
+    """
+    Extract sinusoidal-like wave components from fluorescence traces using a Butterworth bandpass filter.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing time series data with FF0_roi columns
+    fps : float
+        Frames per second (sampling rate)
+    low_freq : float
+        Low cutoff frequency (Hz)
+    high_freq : float
+        High cutoff frequency (Hz)
+    order : int
+        Order of the Butterworth filter
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with added wave columns (FF0_roiX_wave)
+    """
+    df_wave = df.copy()
+    roi_cols = [c for c in df.columns if c.startswith("FF0_roi") and "_wave" not in c]
+    nyq = 0.5 * fps
+    low = low_freq / nyq
+    high = high_freq / nyq
+    b, a = butter(order, [low, high], btype='band')
+    for col in roi_cols:
+        data = df[col].values
+        mask = ~np.isnan(data)
+        filtered = np.full_like(data, np.nan)
+        if np.sum(mask) > order * 2:
+            filtered[mask] = filtfilt(b, a, data[mask])
+        df_wave[f"{col}_wave"] = filtered
+    return df_wave
+
+def estimate_dominant_frequency(trace, fps):
+    """
+    Estimate the dominant frequency of a signal using FFT.
+    Parameters
+    ----------
+    trace : np.ndarray
+        The input signal (wave-filtered fluorescence trace)
+    fps : float
+        Sampling rate (frames per second)
+    Returns
+    -------
+    float
+        Dominant frequency in Hz
+    """
+    n = len(trace)
+    trace = np.nan_to_num(trace)  # Replace NaNs with zero for FFT
+    freqs = np.fft.rfftfreq(n, d=1.0/fps)
+    fft_vals = np.abs(np.fft.rfft(trace))
+    # Ignore DC component (freq=0)
+    fft_vals[0] = 0
+    dominant_idx = np.argmax(fft_vals)
+    return freqs[dominant_idx]
+
+def save_wave_trace_plot(df, out_path="fluorescence_traces_plot_waves.png", fps=None):
+    """
+    Plots only base wave-filtered FF0 traces (not smoothed) in the dataframe and saves as a PNG.
+    Adds dominant frequency to legend.
+    """
+    # Only plot columns matching FF0_roi[0-9]+_wave (not _smooth_wave)
+    roi_cols = [c for c in df.columns if re.match(r"FF0_roi\d+_wave$", c)]
+    if len(roi_cols) == 0:
+        raise ValueError("No wave FF0 columns found in dataframe")
+    plt.figure(figsize=(10, 5))
+    for col in roi_cols:
+        label = col.replace("_wave", "")
+        freq_label = ""
+        if fps is not None:
+            freq = estimate_dominant_frequency(df[col].values, fps)
+            freq_label = f" (main freq: {freq:.2f} Hz)"
+        plt.plot(df["time_s"], df[col], label=label + freq_label, linewidth=2)
+    plt.xlabel("Time (s)")
+    plt.ylabel("F/F0 (Wave Component)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    plt.close()
+    print(f"Saved wave trace plot to {out_path}")
 
 
 ################################################
@@ -334,8 +509,16 @@ def main():
     # 5. Compute F/F0
     df = normalize_traces_FF0(df, F0_MODE, F0_PERCENTILE, F0_FIRST_N)
     
-    # and save the image
+    # 5b. Smooth the traces with enhanced parameters for noisy data
+    df = smooth_traces(df, window_length=21, polyorder=3, additional_smoothing=True)
+    
+    # and save both original and smoothed images
     save_trace_plot(df, out_path="fluorescence_traces_plot.png")
+    save_smoothed_trace_plot(df, out_path="fluorescence_traces_plot_smoothed.png")
+
+    # 5c. Extract and plot wave components
+    df_wave = extract_wave_component(df, fps, low_freq=0.1, high_freq=2.0, order=3)
+    save_wave_trace_plot(df_wave, out_path="fluorescence_traces_plot_waves.png", fps=fps)
 
 
     # 6. Plot F/F0 vs time
