@@ -6,18 +6,18 @@ from scipy.signal import savgol_filter, butter, filtfilt
 from scipy.ndimage import uniform_filter1d
 import re
 
-VIDEO_PATH = "3.avi"
+VIDEO_PATH = "commpacer_jan16/3.avi"
 
 # Reference projection settings
 N_REF_FRAMES = 20          # how many initial frames to use for ROI detection
 USE_MAX_PROJECTION = False   # if False, uses mean projection
 
 # ROI filtering params (pixels)
-MIN_AREA = 60
-MAX_AREA = 500
+MIN_AREA = 30   # Reduced for smaller/dimmer organoids
+MAX_AREA = 1000 # Increased to catch larger blobs
 
 # for moving blobs
-ROI_DILATION_RADIUS = 100  # in pixels, adjust as needed
+ROI_DILATION_RADIUS = 40  # in pixels, adjust as needed
 
 
 # F0 settings
@@ -70,7 +70,7 @@ def build_reference_image(path, n_ref_frames, use_max_projection=True, channel=1
     ref = cv2.normalize(ref, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     return ref
 
-def detect_rois_from_reference(ref_img, min_area=600, max_area=50_000):
+def detect_rois_from_reference(ref_img, min_area=30, max_area=1000):
     """
     Segment bright green blobs on dark background and return one mask per blob.
     Also filters out grid lines (long skinny components) and tiny specks.
@@ -78,21 +78,40 @@ def detect_rois_from_reference(ref_img, min_area=600, max_area=50_000):
     # Stronger blur to merge specks into blobs
     blurred = cv2.GaussianBlur(ref_img, (11, 11), 0)
 
-    # Compute a threshold: mean + 0.5 * std as a simple heuristic
+    # Compute image stats for diagnostics
     mu, sigma = cv2.meanStdDev(blurred)
     mu = float(mu[0][0])
     sigma = float(sigma[0][0])
-    thresh_val = mu + 0.5 * sigma
-
-    # Clamp threshold into [0, 255]
-    thresh_val = max(0, min(255, int(thresh_val)))
-
-    _, thresh = cv2.threshold(
-        blurred,
-        thresh_val,
-        255,
-        cv2.THRESH_BINARY,
-    )
+    
+    print(f"[ROI Detection] Image stats: mean={mu:.1f}, std={sigma:.1f}")
+    
+    # For low contrast images, enhance contrast first using CLAHE
+    # This is crucial for detecting dim organoids
+    if sigma < 50:  # Low contrast detected
+        print("[ROI Detection] Low contrast detected, applying CLAHE enhancement")
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blurred)
+        
+        # Save enhanced image for debugging
+        cv2.imwrite("debug_enhanced.png", enhanced)
+        print("[Debug] Saved enhanced image to debug_enhanced.png")
+        
+        # Recompute stats on enhanced image
+        mu_e, sigma_e = cv2.meanStdDev(enhanced)
+        mu_e = float(mu_e[0][0])
+        sigma_e = float(sigma_e[0][0])
+        print(f"[ROI Detection] Enhanced image stats: mean={mu_e:.1f}, std={sigma_e:.1f}")
+        
+        # Use Otsu's method on enhanced image for automatic threshold
+        _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        print(f"[ROI Detection] Using Otsu threshold on enhanced image")
+    else:
+        # Standard threshold for higher contrast images
+        THRESH_MULTIPLIER = 0.2
+        thresh_val = mu + THRESH_MULTIPLIER * sigma
+        thresh_val = max(0, min(255, int(thresh_val)))
+        print(f"[ROI Detection] Using global threshold={thresh_val}")
+        _, thresh = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY)
 
     # Clean up: remove tiny holes, fill small gaps
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
@@ -139,6 +158,10 @@ def detect_rois_from_reference(ref_img, min_area=600, max_area=50_000):
 
     print(f"connectedComponents found {num_labels - 1} components, "
           f"kept {len(masks)} after area/aspect filtering")
+    
+    # Save threshold image for debugging
+    cv2.imwrite("debug_threshold.png", thresh)
+    print(f"[Debug] Saved threshold image to debug_threshold.png")
 
     return masks, roi_info, thresh
 
@@ -530,7 +553,7 @@ def main():
     plt.ylabel("F/F0")
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    # plt.show() removed to prevent blocking; plot is saved to file instead
 
     # 7. Save traces
     df.to_csv("fluorescence_traces.csv", index=False)
