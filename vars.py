@@ -7,7 +7,7 @@ Modify these variables to adjust ROI detection and analysis parameters.
 # VIDEO SETTINGS
 # ==============================================================================
 
-VIDEO_PATH = "01_16_15-32_vid2.avi"
+VIDEO_PATH = "15_50_30_yuqi_pacing_Organoid3_Working_vid1.avi"
 
 # Video clipping (to ignore portions of video)
 START_TIME_SEC = 3      # Start processing at this time (seconds)
