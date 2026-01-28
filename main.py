@@ -16,7 +16,8 @@ from vars import *
 from roi_detection import detect_rois_dispatcher
 # Import plotting functions
 from plotting import (save_roi_overlay_image, save_trace_plot, 
-                     save_smoothed_trace_plot, save_wave_trace_plot)
+                     save_smoothed_trace_plot, save_wave_trace_plot, 
+                     save_spike_trace_plot)
 
 
 def extract_frame_channel(frame, channel=0):
@@ -313,6 +314,72 @@ def extract_wave_component(df, fps, low_freq=0.1, high_freq=2.0, order=3):
     return df_wave
 
 
+def detect_spikes_and_dips(df, fps, spike_threshold_std=1.5, dip_threshold_std=1.5, 
+                          spike_prominence=0.02, window_size=10):
+    """
+    Detect sharp spikes (rapid increases) and dips (rapid decreases) in fluorescence traces.
+    Uses derivative-based detection to capture transient events like calcium transients.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing time series data with FF0_roi columns
+    fps : float
+        Frames per second (sampling rate)
+    spike_threshold_std : float
+        Number of standard deviations above mean derivative to detect spikes
+    dip_threshold_std : float
+        Number of standard deviations below mean derivative to detect dips
+    spike_prominence : float
+        Minimum change in F/F0 to be considered a significant transient
+    window_size : int
+        Window for computing local baseline
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with added spike/dip detection columns
+    """
+    df_spikes = df.copy()
+    roi_cols = [c for c in df.columns if c.startswith("FF0_roi") and "_smooth" not in c and "_wave" not in c and "_spike" not in c]
+    
+    for col in roi_cols:
+        data = df[col].values
+        mask = ~np.isnan(data)
+        
+        # Calculate first derivative (rate of change)
+        derivative = np.zeros_like(data)
+        derivative[1:] = np.diff(data)
+        
+        # Calculate statistics on the derivative
+        valid_deriv = derivative[mask]
+        if len(valid_deriv) > 0:
+            deriv_mean = np.mean(valid_deriv)
+            deriv_std = np.std(valid_deriv)
+            
+            # Adaptive thresholds based on the signal's variability
+            spike_threshold = deriv_mean + spike_threshold_std * deriv_std
+            dip_threshold = deriv_mean - dip_threshold_std * deriv_std
+        else:
+            spike_threshold = 0.03
+            dip_threshold = -0.03
+        
+        # Detect spikes (rapid increases)
+        spike_mask = (derivative > spike_threshold) & (derivative > spike_prominence)
+        
+        # Detect dips (rapid decreases)  
+        dip_mask = (derivative < dip_threshold) & (derivative < -spike_prominence)
+        
+        # Store spike and dip information
+        df_spikes[f"{col}_spike"] = spike_mask.astype(float)
+        df_spikes[f"{col}_dip"] = dip_mask.astype(float)
+        
+        # Create derivative trace for visualization
+        df_spikes[f"{col}_derivative"] = derivative
+    
+    return df_spikes
+
+
 ################################################
 ### main function
 ################################################ 
@@ -379,6 +446,10 @@ def main():
     df_wave = extract_wave_component(df, fps, low_freq=WAVE_LOW_FREQ, 
                                     high_freq=WAVE_HIGH_FREQ, order=WAVE_FILTER_ORDER)
     save_wave_trace_plot(df_wave, out_path="fluorescence_traces_plot_waves.png", fps=fps)
+    
+    # 5d. Detect and plot spikes and dips
+    df = detect_spikes_and_dips(df, fps)
+    save_spike_trace_plot(df, out_path="fluorescence_spikes.png")
 
 
     # 6. Plot F/F0 vs time

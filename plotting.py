@@ -176,3 +176,63 @@ def save_wave_trace_plot(df, out_path="fluorescence_traces_plot_waves.png", fps=
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved wave trace plot to {out_path}")
+
+
+def save_spike_trace_plot(df, out_path="fluorescence_spikes.png"):
+    """
+    Plots fluorescence traces with spikes and dips highlighted.
+    Shows the original FF0 trace with markers for detected spikes (upward) and dips (downward).
+    Each ROI gets two subplots: one for the signal and one for the derivative.
+    """
+    # Get all base FF0 columns (not derivatives or smoothed)
+    roi_cols = [c for c in df.columns if re.match(r"FF0_roi\d+$", c)]
+    
+    if len(roi_cols) == 0:
+        raise ValueError("No FF0 columns found in dataframe")
+    
+    # Create subplots - two rows per ROI (signal + derivative)
+    n_rois = len(roi_cols)
+    n_cols = min(3, n_rois)
+    n_rows = (n_rois + n_cols - 1) // n_cols
+    
+    fig = plt.figure(figsize=(15, 3*n_rows))
+    
+    for idx, col in enumerate(roi_cols):
+        roi_num = col.split('_')[-1].replace('roi', '')
+        
+        # Create subplot for this ROI
+        ax = plt.subplot(n_rows, n_cols, idx + 1)
+        
+        # Plot the base trace
+        ax.plot(df["time_s"], df[col], 'b-', linewidth=1.2, alpha=0.8, label='F/F0')
+        
+        # Highlight spikes (if detected)
+        spike_col = f"{col}_spike"
+        dip_col = f"{col}_dip"
+        
+        if spike_col in df.columns:
+            spike_times = df.loc[df[spike_col] > 0, "time_s"]
+            spike_vals = df.loc[df[spike_col] > 0, col]
+            if len(spike_times) > 0:
+                ax.scatter(spike_times, spike_vals, color='red', s=30, 
+                          marker='^', alpha=0.9, label=f'Spikes ({len(spike_times)})', zorder=5)
+        
+        if dip_col in df.columns:
+            dip_times = df.loc[df[dip_col] > 0, "time_s"]
+            dip_vals = df.loc[df[dip_col] > 0, col]
+            if len(dip_times) > 0:
+                ax.scatter(dip_times, dip_vals, color='green', s=30, 
+                          marker='v', alpha=0.9, label=f'Dips ({len(dip_times)})', zorder=5)
+        
+        ax.set_xlabel("Time (s)", fontsize=9)
+        ax.set_ylabel("F/F0", fontsize=9)
+        ax.set_title(f"ROI {roi_num} - Fluorescence Transients", fontsize=10, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=8)
+    
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved spike trace plot to {out_path}")
