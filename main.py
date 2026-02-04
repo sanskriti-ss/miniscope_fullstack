@@ -3,6 +3,8 @@ Main Pipeline for Fluorescence Trace Extraction
 Detects ROIs and extracts fluorescence traces from microscopy videos.
 """
 
+
+import os
 import cv2
 import numpy as np
 import pandas as pd
@@ -380,11 +382,13 @@ def detect_spikes_and_dips(df, fps, spike_threshold_std=1.5, dip_threshold_std=1
     return df_spikes
 
 
-################################################
-### main function
-################################################ 
 
 def main():
+    # --- Output directory setup ---
+    avi_base = os.path.splitext(os.path.basename(VIDEO_PATH))[0]
+    out_dir = avi_base
+    os.makedirs(out_dir, exist_ok=True)
+
     fps, n_frames, h, w, start_frame, end_frame = load_video_metadata(
         VIDEO_PATH,
         start_time_sec=START_TIME_SEC,
@@ -423,7 +427,7 @@ def main():
         video_path=VIDEO_PATH,
         roi_masks=roi_masks,
         roi_info=roi_info,
-        out_path="rois_on_first_frame.png",
+        out_path=os.path.join(out_dir, "rois_on_first_frame.png"),
     )
 
     # 4. Extract F(t) for each ROI
@@ -439,17 +443,17 @@ def main():
                       additional_smoothing=ADDITIONAL_SMOOTHING)
     
     # and save both original and smoothed images
-    save_trace_plot(df, out_path="fluorescence_traces_plot.png")
-    save_smoothed_trace_plot(df, out_path="fluorescence_traces_plot_smoothed.png")
+    save_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_traces_plot.png"))
+    save_smoothed_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_traces_plot_smoothed.png"))
 
     # 5c. Extract and plot wave components
     df_wave = extract_wave_component(df, fps, low_freq=WAVE_LOW_FREQ, 
                                     high_freq=WAVE_HIGH_FREQ, order=WAVE_FILTER_ORDER)
-    save_wave_trace_plot(df_wave, out_path="fluorescence_traces_plot_waves.png", fps=fps)
+    save_wave_trace_plot(df_wave, out_path=os.path.join(out_dir, "fluorescence_traces_plot_waves.png"), fps=fps)
     
     # 5d. Detect and plot spikes and dips
     df = detect_spikes_and_dips(df, fps)
-    save_spike_trace_plot(df, out_path="fluorescence_spikes.png")
+    save_spike_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_spikes.png"))
 
 
     # 6. Plot F/F0 vs time
@@ -470,8 +474,8 @@ def main():
     # plt.show() removed to prevent blocking; plot is saved to file instead
 
     # 7. Save traces
-    df.to_csv("fluorescence_traces.csv", index=False)
-    print("Saved traces to fluorescence_traces.csv")
+    df.to_csv(os.path.join(out_dir, "fluorescence_traces.csv"), index=False)
+    print(f"Saved traces to {os.path.join(out_dir, 'fluorescence_traces.csv')}")
 
 
 #### calling main function

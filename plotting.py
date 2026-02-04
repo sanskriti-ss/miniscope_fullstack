@@ -2,7 +2,7 @@
 Plotting Functions
 Contains functions for visualizing ROIs and fluorescence traces.
 """
-
+import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -52,6 +52,11 @@ def save_roi_overlay_image(
             cv2.LINE_AA,
         )
 
+    # Ensure output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
     cv2.imwrite(out_path, overlay)
     print(f"Saved ROI overlay image to {out_path}")
 
@@ -81,6 +86,10 @@ def save_trace_plot(df, out_path="fluorescence_traces_plot.png"):
         plt.legend()
         plt.tight_layout()
 
+    # Ensure output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()  # prevents display in some environments
 
@@ -115,6 +124,10 @@ def save_smoothed_trace_plot(df, out_path="fluorescence_traces_plot_smoothed.png
         plt.legend()
         plt.tight_layout()
 
+    # Ensure output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()  # prevents display in some environments
 
@@ -173,6 +186,10 @@ def save_wave_trace_plot(df, out_path="fluorescence_traces_plot_waves.png", fps=
         plt.legend()
         plt.tight_layout()
     
+    # Ensure output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved wave trace plot to {out_path}")
@@ -232,6 +249,10 @@ def save_spike_trace_plot(df, out_path="fluorescence_spikes.png"):
         ax.tick_params(labelsize=8)
     
     plt.tight_layout()
+    # Ensure output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     

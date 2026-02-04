@@ -7,17 +7,22 @@ Modify these variables to adjust ROI detection and analysis parameters.
 # VIDEO SETTINGS
 # ==============================================================================
 
-VIDEO_PATH = "15_50_30_yuqi_pacing_Organoid3_Working_vid1.avi"
+### "15_50_30_yuqi_pacing_Organoid3_Working_vid1.avi" ## this is good
+
+VIDEO_PATH = "17_05_47_QUAN_1.avi"  # Path to input video file
 
 # Video clipping (to ignore portions of video)
 START_TIME_SEC = 3      # Start processing at this time (seconds)
-END_TIME_SEC = 13        # End processing at this time (seconds, 0 = end of video)
+END_TIME_SEC = 5.2        # End processing at this time (seconds, 0 = end of video)
 SKIP_FIRST_FRAMES = 0   # Skip this many frames at the start (alternative to START_TIME_SEC)
 
 # Choose which channel to use (0 = Blue, 1 = Green, 2 = Red)
 # NOTE: If your video is grayscale (black/white), channel selection has no effect
 #       All channels will be identical for grayscale videos
 CHANNEL = 0  # Use 0 for grayscale or any channel for color videos
+
+# Manual ROI selection (for mechanical analysis)
+MANUAL_ROI_SELECTION = True  # If True, allows user to draw ROI manually; if False, uses automatic detection
 
 
 # ==============================================================================

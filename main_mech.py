@@ -4,6 +4,8 @@ Detects and quantifies beating/pulsation by tracking organoid border fluctuation
 Uses high-pass filtering to capture the border between organoid and background.
 """
 
+
+import os
 import cv2
 import numpy as np
 import pandas as pd
@@ -604,104 +606,119 @@ def detect_single_organoid_roi(video_path, channel=0, n_frames=50, start_frame=0
     cv2.imwrite("debug_organoid_highpass.png", highpass)
     print("[Debug] Saved high-pass filtered image to debug_organoid_highpass.png")
     
-    # STEP 2: Create center ROI mask (organoid is centered, ~1/3 width and height)
+    # STEP 2: Threshold highpass image to get strong edges
+    print("[Organoid Detection] Finding strongest edges in highpass image...")
     h, w = ref_img.shape
-    center_y, center_x = h // 2, w // 2
-    roi_radius = int(min(h, w) * 0.22)  # Slightly smaller to focus on organoid
     
-    # Create circular ROI around center
-    roi_mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.circle(roi_mask, (center_x, center_y), roi_radius, 255, -1)
-    cv2.imwrite("debug_organoid_roi_circle.png", roi_mask)
-    print(f"[Organoid Detection] Created center ROI: radius={roi_radius} at center=({center_x}, {center_y})")
+    # Use high percentile threshold to keep only the brightest edges (organoid border)
+    threshold_val = np.percentile(highpass, 93)  # Top 7% of pixel intensities
+    print(f"[Debug] Using threshold={threshold_val:.1f} (93rd percentile)")
     
-    # STEP 3: Threshold high-pass image with lower threshold to capture border
-    print("[Organoid Detection] Creating strong edge map from high-pass...")
-    _, edge_strong = cv2.threshold(highpass, 80, 255, cv2.THRESH_BINARY)  # Lower threshold
+    _, strong_edges = cv2.threshold(highpass, threshold_val, 255, cv2.THRESH_BINARY)
+    cv2.imwrite("debug_organoid_edges_strong.png", strong_edges)
+    print(f"[Debug] Strong edges: {np.count_nonzero(strong_edges)} pixels")
     
-    # Apply ROI mask
-    edge_strong_roi = edge_strong.copy()
-    edge_strong_roi[roi_mask == 0] = 0
-    cv2.imwrite("debug_organoid_edges_strong.png", edge_strong_roi)
-    strong_edge_pixels = np.count_nonzero(edge_strong_roi)
-    print(f"[Debug] Strong edges in ROI: {strong_edge_pixels} pixels")
+    # STEP 3: Find connected components of edges (to find the organoid edge cluster)
+    print("[Organoid Detection] Finding edge clusters...")
+    # LIGHTLY dilate to connect only very close edge fragments (not everything!)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    edges_connected = cv2.dilate(strong_edges, kernel, iterations=1)
+    cv2.imwrite("debug_organoid_edges_connected.png", edges_connected)
     
-    # STEP 4: Minimally dilate just enough to close small gaps in the edge ring
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    edges_dilated = cv2.dilate(edge_strong_roi, kernel, iterations=3)
-    cv2.imwrite("debug_organoid_edges_dilated.png", edges_dilated)
-    print(f"[Debug] Dilated edges: {np.count_nonzero(edges_dilated)} pixels")
+    # Find connected components
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        edges_connected, connectivity=8, ltype=cv2.CV_32S
+    )
     
-    # STEP 5: Light morphological closing to form continuous ring
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    binary_ring = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel_close, iterations=2)
-    cv2.imwrite("debug_organoid_binary_ring.png", binary_ring)
-    print(f"[Debug] After closing: {np.count_nonzero(binary_ring)} pixels")
+    print(f"[Debug] Found {num_labels - 1} edge clusters")
     
-    # STEP 6: Use the edge ring itself as the organoid mask (don't fill interior)
-    # This keeps the mask following the actual detected border
-    print("[Organoid Detection] Using edge ring directly as organoid boundary...")
-    binary_filled = binary_ring.copy()
+    # Find clusters and prioritize those in bottom-right area (x > w/2, y > h/2)
+    candidate_clusters = []
     
-    # Optionally fill small interior holes, but keep it tight
-    kernel_fill = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    binary_filled = cv2.morphologyEx(binary_filled, cv2.MORPH_CLOSE, kernel_fill, iterations=1)
+    for label in range(1, num_labels):  # Skip background (0)
+        area = stats[label, cv2.CC_STAT_AREA]
+        cx, cy = centroids[label]
+        
+        # Filter: only consider clusters with reasonable size
+        if area < 200 or area > h * w * 0.3:  # Too small or too large
+            continue
+        
+        # Check if in bottom-right quadrant (x > w/2, y > h/2)
+        in_bottom_right = (cx > w / 2) and (cy > h / 2)
+        
+        candidate_clusters.append({
+            'label': label,
+            'area': area,
+            'center': (cx, cy),
+            'in_bottom_right': in_bottom_right
+        })
     
-    # Keep only pixels in ROI
-    binary_filled[roi_mask == 0] = 0
+    # Sort: bottom-right first, then by area
+    candidate_clusters.sort(key=lambda x: (not x['in_bottom_right'], -x['area']))
+    
+    print(f"[Debug] Top 15 edge clusters (prioritizing bottom-right quadrant x>{w/2:.0f}, y>{h/2:.0f}):")
+    for i, cluster in enumerate(candidate_clusters[:15]):
+        loc = "BOTTOM-RIGHT" if cluster['in_bottom_right'] else "other"
+        print(f"  {i+1}. label={cluster['label']}, area={cluster['area']}, center=({cluster['center'][0]:.0f}, {cluster['center'][1]:.0f}) [{loc}]")
+    
+    if len(candidate_clusters) == 0:
+        print("[ERROR] No significant edge cluster found!")
+        return None, None
+    
+    # Select the first bottom-right cluster, or fall back to largest if none
+    best_cluster = candidate_clusters[0]
+    best_label = best_cluster['label']
+    
+    print(f"[Debug] Selected edge cluster: label={best_label}, area={best_cluster['area']}, center=({best_cluster['center'][0]:.0f}, {best_cluster['center'][1]:.0f})")
+    
+    # STEP 4: Get the organoid center and size from this cluster
+    cluster_mask = (labels == best_label).astype(np.uint8)
+    edge_points = np.where(cluster_mask > 0)
+    
+    center_y = np.mean(edge_points[0])
+    center_x = np.mean(edge_points[1])
+    
+    # Calculate standard deviation to estimate radius
+    std_y = np.std(edge_points[0])
+    std_x = np.std(edge_points[1])
+    
+    # Radius is approximately 1.5 * std (to encompass the organoid)
+    radius_y = std_y * 1.8
+    radius_x = std_x * 1.8
+    
+    print(f"[Debug] Organoid center: ({center_x:.0f}, {center_y:.0f})")
+    print(f"[Debug] Estimated radius: x={radius_x:.0f}, y={radius_y:.0f}")
+    
+    # STEP 5: Create elliptical mask around the detected center
+    print("[Organoid Detection] Creating organoid mask...")
+    binary_filled = np.zeros((h, w), dtype=np.uint8)
+    
+    # Draw filled ellipse
+    cv2.ellipse(binary_filled, 
+                (int(center_x), int(center_y)),
+                (int(radius_x), int(radius_y)),
+                0, 0, 360, 255, -1)
+    
     cv2.imwrite("debug_organoid_binary.png", binary_filled)
     filled_pixels = np.count_nonzero(binary_filled)
-    print(f"[Debug] Final mask: {filled_pixels} pixels")
+    print(f"[Debug] Organoid mask: {filled_pixels} pixels")
     
-    # STEP 7: Find connected components
+    # STEP 6: Verify the mask makes sense
+    if filled_pixels < 1000 or filled_pixels > h * w * 0.7:
+        print(f"[ERROR] Mask size is unreasonable: {filled_pixels} pixels")
+        return None, None
+    
+    # STEP 7: Extract organoid info from the mask
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
         binary_filled, connectivity=8, ltype=cv2.CV_32S
     )
     
     if num_labels <= 1:
-        print("[ERROR] No organoid detected!")
+        print("[ERROR] Mask is empty!")
         return None, None
     
-    # Debug: print all detected components
-    print(f"[Debug] Found {num_labels - 1} components:")
-    
-    # Find the largest component
-    all_contours, _ = cv2.findContours(binary_filled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    best_label = None
-    best_area = 0
-    
-    for contour in all_contours:
-        area = cv2.contourArea(contour)
-        perimeter = cv2.arcLength(contour, closed=True)
-        
-        if area < 100:  # Very permissive minimum
-            continue
-        
-        if perimeter > 0:
-            circularity = (4 * np.pi * area) / (perimeter ** 2)
-        else:
-            circularity = 0
-        
-        print(f"  Contour: area={area:.0f}, perimeter={perimeter:.1f}, circularity={circularity:.3f}")
-        
-        # Select the largest component
-        if area > best_area:
-            best_area = area
-            # Find which label
-            temp_mask = np.zeros_like(binary_filled)
-            cv2.drawContours(temp_mask, [contour], -1, 255, -1)
-            
-            for label in range(1, num_labels):
-                if np.any((labels == label) & (temp_mask > 0)):
-                    best_label = label
-                    break
-    
-    if best_label is None:
-        print(f"[ERROR] No suitable organoid detected!")
-        return None, None
-    
-    # Create final mask
+    # Get the main component (should be label 1)
+    best_label = 1
     mask = (labels == best_label).astype(np.uint8)
     
     # Get info
@@ -709,14 +726,14 @@ def detect_single_organoid_roi(video_path, channel=0, n_frames=50, start_frame=0
     cx, cy = centroids[best_label]
     x = stats[best_label, cv2.CC_STAT_LEFT]
     y = stats[best_label, cv2.CC_STAT_TOP]
-    w = stats[best_label, cv2.CC_STAT_WIDTH]
-    h = stats[best_label, cv2.CC_STAT_HEIGHT]
+    w_bbox = stats[best_label, cv2.CC_STAT_WIDTH]
+    h_bbox = stats[best_label, cv2.CC_STAT_HEIGHT]
     
     info = {
         "label": 1,
         "area": int(area),
         "centroid": (float(cx), float(cy)),
-        "bbox": (int(x), int(y), int(w), int(h)),
+        "bbox": (int(x), int(y), int(w_bbox), int(h_bbox)),
     }
     
     print(f"[Organoid Detection] Found organoid: area={area:.0f} pixels, center=({cx:.0f}, {cy:.0f})")
@@ -728,6 +745,162 @@ def detect_single_organoid_roi(video_path, channel=0, n_frames=50, start_frame=0
     return mask, info
 
 
+def manual_roi_selection(video_path, channel=0, start_frame=0, n_frames=10):
+    """
+    Allow user to manually draw a polygon ROI on the video frame.
+    
+    Parameters
+    ----------
+    video_path : str
+        Path to video file
+    channel : int
+        Channel to display
+    start_frame : int
+        Starting frame
+    n_frames : int
+        Number of frames to average for display
+    
+    Returns
+    -------
+    mask : np.ndarray
+        Binary mask of the manually selected ROI
+    info : dict
+        Dictionary with ROI information
+    """
+    print("[Manual ROI Selection] Loading reference image...")
+    
+    # Build averaged reference image for display
+    ref_img = build_reference_image(video_path, n_frames, use_max_projection=False,
+                                   channel=channel, start_frame=start_frame)
+    
+    # Apply highpass filter to show organoid border more clearly
+    highpass = apply_highpass_filter(ref_img, kernel_size=51)
+    
+    # Create display image (blend original and highpass for better visibility)
+    display = cv2.addWeighted(ref_img, 0.6, highpass, 0.4, 0)
+    display_color = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
+    
+    h, w = ref_img.shape
+    
+    # Variables for polygon drawing
+    points = []
+    drawing = False
+    
+    def mouse_callback(event, x, y, flags, param):
+        nonlocal points, drawing, display_color
+        
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # Start/continue drawing
+            points.append((x, y))
+            drawing = True
+            
+            # Draw the point
+            temp_display = display_color.copy()
+            for i, pt in enumerate(points):
+                cv2.circle(temp_display, pt, 3, (0, 255, 0), -1)
+                if i > 0:
+                    cv2.line(temp_display, points[i-1], pt, (0, 255, 0), 2)
+            
+            # Draw line back to first point if more than 2 points
+            if len(points) > 2:
+                cv2.line(temp_display, points[-1], points[0], (0, 255, 0), 1)
+            
+            cv2.imshow("Manual ROI Selection", temp_display)
+        
+        elif event == cv2.EVENT_MOUSEMOVE and drawing:
+            # Show preview line
+            temp_display = display_color.copy()
+            for i, pt in enumerate(points):
+                cv2.circle(temp_display, pt, 3, (0, 255, 0), -1)
+                if i > 0:
+                    cv2.line(temp_display, points[i-1], pt, (0, 255, 0), 2)
+            
+            if len(points) > 0:
+                cv2.line(temp_display, points[-1], (x, y), (0, 255, 0), 1)
+            
+            if len(points) > 2:
+                cv2.line(temp_display, points[-1], points[0], (0, 255, 0), 1)
+            
+            cv2.imshow("Manual ROI Selection", temp_display)
+    
+    # Create window and set mouse callback
+    cv2.namedWindow("Manual ROI Selection")
+    cv2.setMouseCallback("Manual ROI Selection", mouse_callback)
+    cv2.imshow("Manual ROI Selection", display_color)
+    
+    print("\n" + "="*70)
+    print("MANUAL ROI SELECTION INSTRUCTIONS:")
+    print("="*70)
+    print("  - Click to add points around the organoid")
+    print("  - Press ENTER when done (will auto-close the polygon)")
+    print("  - Press 'r' to reset and start over")
+    print("  - Press 'ESC' to cancel")
+    print("="*70 + "\n")
+    
+    while True:
+        key = cv2.waitKey(1) & 0xFF
+        
+        if key == 13:  # ENTER - finish
+            if len(points) >= 3:
+                break
+            else:
+                print("[Warning] Need at least 3 points to create a polygon")
+        
+        elif key == ord('r'):  # Reset
+            points = []
+            drawing = False
+            cv2.imshow("Manual ROI Selection", display_color)
+            print("[Manual ROI] Reset - start drawing again")
+        
+        elif key == 27:  # ESC - cancel
+            print("[Manual ROI] Cancelled by user")
+            cv2.destroyAllWindows()
+            return None, None
+    
+    cv2.destroyAllWindows()
+    
+    if len(points) < 3:
+        print("[ERROR] Need at least 3 points to create ROI")
+        return None, None
+    
+    # Create mask from polygon
+    mask = np.zeros((h, w), dtype=np.uint8)
+    points_array = np.array(points, dtype=np.int32)
+    cv2.fillPoly(mask, [points_array], 255)
+    
+    # Calculate ROI info
+    M = cv2.moments(points_array)
+    if M['m00'] > 0:
+        cx = M['m10'] / M['m00']
+        cy = M['m01'] / M['m00']
+    else:
+        cx, cy = np.mean(points_array[:, 0]), np.mean(points_array[:, 1])
+    
+    x_coords = points_array[:, 0]
+    y_coords = points_array[:, 1]
+    bbox = (int(np.min(x_coords)), int(np.min(y_coords)),
+            int(np.max(x_coords) - np.min(x_coords)),
+            int(np.max(y_coords) - np.min(y_coords)))
+    
+    area = np.sum(mask > 0)
+    
+    info = {
+        "label": 1,
+        "area": int(area),
+        "centroid": (float(cx), float(cy)),
+        "bbox": bbox,
+    }
+    
+    print(f"[Manual ROI] Created ROI: area={area} pixels, center=({cx:.0f}, {cy:.0f})")
+    
+    # Save mask for debugging
+    cv2.imwrite("debug_organoid_mask.png", mask)
+    cv2.imwrite("debug_organoid_original.png", ref_img)
+    cv2.imwrite("debug_organoid_highpass.png", highpass)
+    
+    return mask.astype(np.uint8), info
+
+
 def main():
     """Main pipeline for mechanical movement tracking."""
     
@@ -735,6 +908,12 @@ def main():
     print("ORGANOID MECHANICAL MOVEMENT TRACKING")
     print("=" * 70)
     
+
+    # --- Output directory setup ---
+    avi_base = os.path.splitext(os.path.basename(VIDEO_PATH))[0]
+    out_dir = avi_base
+    os.makedirs(out_dir, exist_ok=True)
+
     # Load video metadata
     fps, n_frames, h, w, start_frame, end_frame = load_video_metadata(
         VIDEO_PATH,
@@ -745,18 +924,28 @@ def main():
     print(f"\n[Video] {VIDEO_PATH}")
     print(f"  FPS: {fps}, Frames: {n_frames} (after clipping), Size: {w}x{h}")
 
-    # 1. Detect single organoid ROI
-    print(f"\n[ROI Detection] Detecting single large organoid ROI...")
-    mask, info = detect_single_organoid_roi(
-        video_path=VIDEO_PATH,
-        channel=CHANNEL,
-        n_frames=min(N_REF_FRAMES, n_frames),
-        start_frame=start_frame
-    )
+    # 1. Detect or manually select organoid ROI
+    if MANUAL_ROI_SELECTION:
+        print(f"\n[ROI Selection] Manual ROI selection mode...")
+        mask, info = manual_roi_selection(
+            video_path=VIDEO_PATH,
+            channel=CHANNEL,
+            start_frame=start_frame,
+            n_frames=min(N_REF_FRAMES, n_frames)
+        )
+    else:
+        print(f"\n[ROI Detection] Automatic organoid detection...")
+        mask, info = detect_single_organoid_roi(
+            video_path=VIDEO_PATH,
+            channel=CHANNEL,
+            n_frames=min(N_REF_FRAMES, n_frames),
+            start_frame=start_frame
+        )
     
     if mask is None or info is None:
-        print("\n[ERROR] No organoid detected! Cannot track mechanical movement.")
-        print("Try adjusting the video or check if organoid is visible.")
+        print("\n[ERROR] No organoid ROI created! Cannot track mechanical movement.")
+        if not MANUAL_ROI_SELECTION:
+            print("Try using MANUAL_ROI_SELECTION=True in vars.py to draw your own ROI.")
         return
     
     roi_masks = [mask]
@@ -768,9 +957,9 @@ def main():
         video_path=VIDEO_PATH,
         roi_masks=roi_masks,
         roi_info=roi_info,
-        out_path="mechanical_rois_overlay.png",
+        out_path=os.path.join(out_dir, "mechanical_rois_overlay.png"),
     )
-    print("  Saved ROI overlay to mechanical_rois_overlay.png")
+    print(f"  Saved ROI overlay to {os.path.join(out_dir, 'mechanical_rois_overlay.png')}")
 
     # 2. Extract mechanical traces
     print(f"\n[Mechanical Analysis] Extracting movement traces...")
@@ -790,17 +979,17 @@ def main():
     df = normalize_and_smooth_traces(df, window_size=21)
     
     # 4. Save raw data
-    csv_path = "mechanical_traces.csv"
+    csv_path = os.path.join(out_dir, "mechanical_traces.csv")
     df.to_csv(csv_path, index=False)
     print(f"  Saved mechanical traces to {csv_path}")
     
     # 5. Plot individual ROI traces (now just one organoid)
     print(f"\n[Plotting] Generating plots...")
     plot_mechanical_traces(df, roi_idx=1, fps=fps, 
-                          out_path=f"mechanical_traces_organoid.png")
+                          out_path=os.path.join(out_dir, "mechanical_traces_organoid.png"))
     
     # 6. Create beat summary
-    plot_beat_summary(df, fps=fps, out_path="mechanical_beat_summary.png")
+    plot_beat_summary(df, fps=fps, out_path=os.path.join(out_dir, "mechanical_beat_summary.png"))
     
     # 7. Print summary statistics
     print(f"\n" + "=" * 70)
