@@ -9,7 +9,14 @@ python main.py
 
 python main.py will do the following:
 1) run trace_extraction, which will give you the peak plots + ROIs annotated on the first frame for verification
-2) give you plots (decay 90, etc) from the data (still in progress)
+2) give you plots (decay 90, etc) from the data (still in progress; insufficient data collection as of last update).
+
+Input files will look like this:
+![DOF with ROI](01_27_15-18_DOF_Dark1/rois_on_first_frame.png)
+Output files may look like this:
+![Graphing](01_27_15-18_DOF_Dark1/fluorescence_traces_plot_waves.png)
+* Will update with comparative fluorescence patterns for three different drugs and normal soon
+
 
 Main to-dos:
 * add mechanical contractility modules after validating the data files.

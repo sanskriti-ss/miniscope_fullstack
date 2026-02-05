@@ -12,6 +12,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, find_peaks
 from scipy.ndimage import gaussian_filter
+import argparse
 
 # Import configuration variables
 from vars import *
@@ -19,6 +20,8 @@ from vars import *
 from roi_detection import detect_rois_dispatcher
 # Import plotting functions
 from plotting import save_roi_overlay_image
+# Import shared ROI selection functions
+from roi_selection import preview_video_and_draw_rois, extract_frame_channel
 
 
 def extract_frame_channel(frame, channel=0):
@@ -904,6 +907,10 @@ def manual_roi_selection(video_path, channel=0, start_frame=0, n_frames=10):
 def main():
     """Main pipeline for mechanical movement tracking."""
     
+    parser = argparse.ArgumentParser(description="Run the mechanical movement tracking pipeline.")
+    parser.add_argument("--manual", action="store_true", help="Enable manual ROI selection mode.")
+    args = parser.parse_args()
+    
     print("=" * 70)
     print("ORGANOID MECHANICAL MOVEMENT TRACKING")
     print("=" * 70)
@@ -925,14 +932,20 @@ def main():
     print(f"  FPS: {fps}, Frames: {n_frames} (after clipping), Size: {w}x{h}")
 
     # 1. Detect or manually select organoid ROI
-    if MANUAL_ROI_SELECTION:
+    if args.manual or MANUAL_ROI_SELECTION:
         print(f"\n[ROI Selection] Manual ROI selection mode...")
-        mask, info = manual_roi_selection(
+        roi_masks, roi_info = preview_video_and_draw_rois(
             video_path=VIDEO_PATH,
             channel=CHANNEL,
-            start_frame=start_frame,
-            n_frames=min(N_REF_FRAMES, n_frames)
+            n_preview_frames=min(N_REF_FRAMES, n_frames)
         )
+        
+        if len(roi_masks) == 0:
+            print("\n[ERROR] No ROIs selected! Cannot track mechanical movement.")
+            return
+        
+        # Use first ROI for mechanical analysis
+        mask, info = roi_masks[0], roi_info[0]
     else:
         print(f"\n[ROI Detection] Automatic organoid detection...")
         mask, info = detect_single_organoid_roi(
