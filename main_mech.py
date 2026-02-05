@@ -918,7 +918,7 @@ def main():
 
     # --- Output directory setup ---
     avi_base = os.path.splitext(os.path.basename(VIDEO_PATH))[0]
-    out_dir = avi_base
+    out_dir = os.path.join("plots", avi_base)
     os.makedirs(out_dir, exist_ok=True)
 
     # Load video metadata
