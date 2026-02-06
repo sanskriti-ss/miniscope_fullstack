@@ -14,10 +14,24 @@ def save_roi_overlay_image(
     roi_masks,
     roi_info,
     out_path: str = "rois_on_first_frame.png",
+    roi_masks_original=None,
 ) -> None:
     """
     Draw ROI outlines and indices on the first frame of the video
     and save as an image.
+    
+    Parameters
+    ----------
+    video_path : str
+        Path to video file
+    roi_masks : list
+        List of ROI masks (may be dilated)
+    roi_info : list
+        List of ROI info dictionaries
+    out_path : str
+        Output file path
+    roi_masks_original : list, optional
+        Original ROI masks before dilation (if available, will draw both)
     """
     cap = cv2.VideoCapture(video_path)
     ret, first_frame = cap.read()
@@ -28,6 +42,18 @@ def save_roi_overlay_image(
 
     overlay = first_frame.copy()
 
+    # Draw original masks first (if provided) in green
+    if roi_masks_original is not None:
+        for idx, (mask_orig, info) in enumerate(zip(roi_masks_original, roi_info), start=1):
+            contours, _ = cv2.findContours(
+                mask_orig.astype(np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            # Draw original contours in green (dashed style approximated with thinner line)
+            cv2.drawContours(overlay, contours, -1, (0, 255, 0), 1)
+
+    # Then draw dilated masks in red
     for idx, (mask, info) in enumerate(zip(roi_masks, roi_info), start=1):
         # Find contours of each ROI mask
         contours, _ = cv2.findContours(
@@ -36,8 +62,8 @@ def save_roi_overlay_image(
             cv2.CHAIN_APPROX_SIMPLE,
         )
 
-        # Draw contours on overlay (red outline)
-        cv2.drawContours(overlay, contours, -1, (0, 0, 255), 1)
+        # Draw contours on overlay (red outline for dilated)
+        cv2.drawContours(overlay, contours, -1, (0, 0, 255), 2)
 
         # Draw ROI index near the centroid
         cx, cy = info["centroid"]
@@ -46,9 +72,22 @@ def save_roi_overlay_image(
             str(idx),
             (int(cx), int(cy)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
+            0.5,
             (255, 255, 255),
-            1,
+            2,
+            cv2.LINE_AA,
+        )
+    
+    # Add legend to image
+    if roi_masks_original is not None:
+        cv2.putText(
+            overlay,
+            "Green=Original ROI, Red=Dilated ROI",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
             cv2.LINE_AA,
         )
 
@@ -134,34 +173,137 @@ def save_smoothed_trace_plot(df, out_path="fluorescence_traces_plot_smoothed.png
     print(f"Saved smoothed trace plot to {out_path}")
 
 
-def estimate_dominant_frequency(trace, fps):
+def save_debug_f0_trace_plot(df, debug_percentile=10, out_path="debug_fluorescence_traces_debug_f0.png"):
     """
-    Estimate the dominant frequency of a signal using FFT.
+    Plots smoothed FF0 traces using a conservative F0 (lower percentile).
+    Shows maximum contrast for visualizing subtle activity.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with fluorescence data
+    debug_percentile : float
+        Percentile to use for F0 (lower = more contrast, 10 = very conservative)
+    out_path : str
+        Output file path
+    """
+    # Extract raw F columns
+    roi_cols = [c for c in df.columns if c.startswith("F_roi") and not c.startswith("F0_")]
+    
+    if len(roi_cols) == 0:
+        print("[Warning] No F_roi columns found for debug F0 plot")
+        return
+    
+    plt.figure(figsize=(10, 5))
+    
+    for col in roi_cols:
+        roi_num = col.replace("F_roi", "")
+        raw_signal = df[col].values
+        
+        # Calculate conservative F0 (lowest percentile)
+        F0_debug = np.nanpercentile(raw_signal, debug_percentile)
+        
+        # Normalize with debug F0
+        ff0_debug = raw_signal / (F0_debug if F0_debug > 0 else np.nan)
+        
+        # Smooth the debug trace
+        smooth_col = f"FF0_roi{roi_num}_smooth"
+        if smooth_col in df.columns:
+            smooth_signal = df[smooth_col].values
+            # Re-normalize smoothed with debug F0
+            ff0_smooth_debug = smooth_signal / (F0_debug if F0_debug > 0 else np.nan)
+        else:
+            ff0_smooth_debug = None
+        
+        # Plot
+        label = f"ROI {roi_num}"
+        plt.plot(df["time_s"], ff0_debug, label=label, linewidth=2, alpha=0.7)
+        
+        if ff0_smooth_debug is not None:
+            plt.plot(df["time_s"], ff0_smooth_debug, linewidth=2.5, alpha=0.9)
+    
+    plt.xlabel("Time (s)")
+    plt.ylabel(f"F/F0 (Conservative F0 = {debug_percentile}th percentile)")
+    plt.title("Debug: Traces with Conservative Baseline (Maximum Contrast)")
+    
+    # Place legend outside if many ROIs
+    if len(roi_cols) > 5:
+        plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        plt.tight_layout(rect=[0, 0, 0.85, 1])
+    else:
+        plt.legend()
+        plt.tight_layout()
+    
+    # Ensure output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved debug F0 trace plot to {out_path}")
+
+
+def estimate_dominant_frequency(trace, fps, method='peak_count'):
+    """
+    Estimate the dominant frequency of a signal.
     Parameters
     ----------
     trace : np.ndarray
-        The input signal (wave-filtered fluorescence trace)
+        The input signal (fluorescence trace)
     fps : float
         Sampling rate (frames per second)
+    method : str
+        'fft': Use FFT (for wave-filtered smooth signals)
+        'peak_count': Use peak detection (for raw/smoothed flashing signals)
     Returns
     -------
     float
         Dominant frequency in Hz
     """
+    from scipy.signal import find_peaks
+    
     n = len(trace)
-    trace = np.nan_to_num(trace)  # Replace NaNs with zero for FFT
-    freqs = np.fft.rfftfreq(n, d=1.0/fps)
-    fft_vals = np.abs(np.fft.rfft(trace))
-    # Ignore DC component (freq=0)
-    fft_vals[0] = 0
-    dominant_idx = np.argmax(fft_vals)
-    return freqs[dominant_idx]
+    trace = np.nan_to_num(trace)  # Replace NaNs with zero
+    
+    if method == 'peak_count':
+        # Count peaks in the signal to estimate flashing frequency
+        # Use prominence-based detection (relative to local baseline, not global threshold)
+        # This handles drifting baselines much better than absolute height thresholds
+        
+        signal_std = np.std(trace)
+        # Prominence: how much the peak stands out from its local surroundings
+        # Set to ~0.3-0.5 of signal std to catch real peaks while ignoring noise
+        prominence = max(0.003, signal_std * 0.3)
+        
+        # Minimum distance between peaks (in samples)
+        # For 60 fps, 0.5 seconds = 30 samples minimum spacing
+        min_distance = max(10, int(fps * 0.5))
+        
+        peaks, properties = find_peaks(trace, prominence=prominence, distance=min_distance)
+        
+        if len(peaks) >= 2:
+            # Calculate average time between peaks
+            peak_times = peaks / fps
+            intervals = np.diff(peak_times)
+            mean_interval = np.mean(intervals)
+            return 1.0 / mean_interval if mean_interval > 0 else 0.0
+        else:
+            return 0.0
+    else:
+        # FFT method (original)
+        freqs = np.fft.rfftfreq(n, d=1.0/fps)
+        fft_vals = np.abs(np.fft.rfft(trace))
+        # Ignore DC component (freq=0)
+        fft_vals[0] = 0
+        dominant_idx = np.argmax(fft_vals)
+        return freqs[dominant_idx]
 
 
 def save_wave_trace_plot(df, out_path="fluorescence_traces_plot_waves.png", fps=None):
     """
     Plots only base wave-filtered FF0 traces (not smoothed) in the dataframe and saves as a PNG.
-    Adds dominant frequency to legend.
+    Adds dominant frequency to legend using peak-counting for better accuracy.
     """
     # Only plot columns matching FF0_roi[0-9]+_wave (not _smooth_wave)
     roi_cols = [c for c in df.columns if re.match(r"FF0_roi\d+_wave$", c)]
@@ -172,8 +314,16 @@ def save_wave_trace_plot(df, out_path="fluorescence_traces_plot_waves.png", fps=
         label = col.replace("_wave", "")
         freq_label = ""
         if fps is not None:
-            freq = estimate_dominant_frequency(df[col].values, fps)
-            freq_label = f" (main freq: {freq:.2f} Hz)"
+            # Use peak-counting on smoothed trace for accurate flashing frequency
+            # Extract base column name (e.g., "FF0_roi1" from "FF0_roi1_wave")
+            base_col = col.replace("_wave", "")
+            smooth_col = f"{base_col}_smooth"
+            if smooth_col in df.columns:
+                freq = estimate_dominant_frequency(df[smooth_col].values, fps, method='peak_count')
+            else:
+                # Fallback to FFT on wave trace
+                freq = estimate_dominant_frequency(df[col].values, fps, method='fft')
+            freq_label = f" (flash freq: {freq:.2f} Hz)"
         plt.plot(df["time_s"], df[col], label=label + freq_label, linewidth=2)
     plt.xlabel("Time (s)")
     plt.ylabel("F/F0 (Wave Component)")
