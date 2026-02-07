@@ -13,9 +13,9 @@ python main.py will do the following:
 
 
 Input files will look like this:
-![DOF with ROI](plots/01_27_15-18_DOF_Dark1/rois_on_first_frame.png)
+![DOF with ROI](plots/17_11_28_Dark_Paced_Stablized_NODRUG/upload_fluorescence_spikes.png)
 Output files may look like this:
-![Graphing](plots/01_27_15-18_DOF_Dark1/fluorescence_traces_plot_waves.png)
+![Graphing](plots/17_11_28_Dark_Paced_Stablized_NODRUG/upload_fluorescence_spikes.png)
 * Will update with comparative fluorescence patterns for three different drugs and normal soon
 
 
