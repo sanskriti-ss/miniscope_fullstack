@@ -345,11 +345,20 @@ def save_wave_trace_plot(df, out_path="fluorescence_traces_plot_waves.png", fps=
     print(f"Saved wave trace plot to {out_path}")
 
 
-def save_spike_trace_plot(df, out_path="fluorescence_spikes.png"):
+def save_spike_trace_plot(df, out_path="fluorescence_spikes.png", video_name=None):
     """
     Plots fluorescence traces with spikes and dips highlighted.
     Shows the original FF0 trace with markers for detected spikes (upward) and dips (downward).
     Each ROI gets two subplots: one for the signal and one for the derivative.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with fluorescence traces
+    out_path : str
+        Output file path
+    video_name : str, optional
+        Name of the source video file to include in the title
     """
     # Get all base FF0 columns (not derivatives or smoothed)
     roi_cols = [c for c in df.columns if re.match(r"FF0_roi\d+$", c)]
@@ -398,6 +407,10 @@ def save_spike_trace_plot(df, out_path="fluorescence_spikes.png"):
         ax.grid(True, alpha=0.3)
         ax.tick_params(labelsize=8)
     
+    # Add overall figure title with video name if provided
+    if video_name:
+        fig.suptitle(video_name, fontsize=12, fontweight='bold', y=1.02)
+    
     plt.tight_layout()
     # Ensure output directory exists
     out_dir = os.path.dirname(out_path)
@@ -407,3 +420,65 @@ def save_spike_trace_plot(df, out_path="fluorescence_spikes.png"):
     plt.close()
     
     print(f"Saved spike trace plot to {out_path}")
+
+
+def save_detrended_trace_plot(df, out_path="fluorescence_traces_detrended.png"):
+    """
+    Plots smoothed fluorescence traces with baseline drift removed (detrended).
+    Shows the effect of removing slow baseline changes while preserving fast flashing peaks.
+    
+    The detrending process:
+    1. Takes smoothed traces (FF0_roi_smooth)
+    2. Fits a low-order polynomial (e.g., quadratic) to extract slow trend
+    3. Subtracts the trend to remove photobleaching/focus drift effects
+    4. Recenters to original mean to maintain scale
+    
+    This visualization helps identify:
+    - Real activity peaks that may be obscured by drift
+    - Whether baseline drop is gradual (photobleaching) or sharp (movement/focus)
+    - Stabilized signal for further analysis
+    """
+    roi_cols = [c for c in df.columns if c.startswith("FF0_roi") and "_detrended" in c]
+    
+    if len(roi_cols) == 0:
+        print("[Warning] No detrended FF0 columns found. Detrending not applied yet.")
+        return
+    
+    n_rois = len(roi_cols)
+    
+    # Create figure with subplots - one per ROI for clarity
+    fig, axes = plt.subplots(n_rois, 1, figsize=(12, 3*n_rois), sharex=True)
+    
+    if n_rois == 1:
+        axes = [axes]
+    
+    for ax, col in zip(axes, roi_cols):
+        roi_num = col.replace("FF0_roi", "").replace("_detrended", "")
+        smooth_col = f"FF0_roi{roi_num}_smooth"
+        
+        # Plot both smoothed (original) and detrended versions
+        if smooth_col in df.columns:
+            ax.plot(df["time_s"], df[smooth_col], 'b-', linewidth=1.5, 
+                   label='Original (with drift)', alpha=0.6)
+        
+        # Plot detrended version
+        ax.plot(df["time_s"], df[col], 'r-', linewidth=2, 
+               label='Detrended (drift removed)', alpha=0.9)
+        
+        ax.set_ylabel(f"ROI {roi_num}\nF/F0", fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right', fontsize=9)
+    
+    axes[-1].set_xlabel('Time (s)', fontsize=10)
+    fig.suptitle('Fluorescence Traces: Original vs Detrended (Baseline Drift Removed)', 
+                fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    
+    # Ensure output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved detrended trace plot to {out_path}")

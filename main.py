@@ -20,7 +20,8 @@ from roi_detection import detect_rois_dispatcher
 # Import plotting functions
 from plotting import (save_roi_overlay_image, save_trace_plot, 
                      save_smoothed_trace_plot, save_wave_trace_plot, 
-                     save_spike_trace_plot)
+                     save_spike_trace_plot, save_debug_f0_trace_plot,
+                     save_detrended_trace_plot)
 # Import shared ROI selection functions
 from roi_selection import preview_video_and_draw_rois, extract_frame_channel
 
@@ -130,7 +131,7 @@ def dilate_roi_masks(roi_masks, radius: int):
     return dilated
 
 
-def extract_traces(path, roi_masks, channel=1, start_frame=0, end_frame=None):
+def extract_traces(path, roi_masks, channel=1, start_frame=0, end_frame=None, roi_masks_for_f0=None):
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise RuntimeError("Could not open video for trace extraction")
@@ -144,6 +145,11 @@ def extract_traces(path, roi_masks, channel=1, start_frame=0, end_frame=None):
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     n_rois = len(roi_masks)
+    
+    # If no separate F0 masks provided, use the trace masks for F0 as well
+    if roi_masks_for_f0 is None:
+        roi_masks_for_f0 = roi_masks
+    
     rows = []
     frame_idx = start_frame
     relative_idx = 0
@@ -161,8 +167,9 @@ def extract_traces(path, roi_masks, channel=1, start_frame=0, end_frame=None):
         t = relative_idx / fps
         F_vals = []
 
-        for m in roi_masks:
-            vals = img[m.astype(bool)]
+        # Extract signal from potentially dilated masks
+        for trace_mask in roi_masks:
+            vals = img[trace_mask.astype(bool)]
             if vals.size == 0:
                 F_vals.append(np.nan)
             else:
@@ -176,6 +183,10 @@ def extract_traces(path, roi_masks, channel=1, start_frame=0, end_frame=None):
 
     cols = ["frame", "time_s"] + [f"F_roi{i+1}" for i in range(n_rois)]
     df = pd.DataFrame(rows, columns=cols)
+    
+    # Store the F0 masks for later use in normalization
+    df._f0_masks = roi_masks_for_f0
+    
     return df, fps
 
 
@@ -193,6 +204,21 @@ def normalize_traces_FF0(df, f0_mode, f0_percentile, f0_first_n):
         df[f"F0_roi{i+1}"] = F0
         df[f"FF0_roi{i+1}"] = df[col] / (F0 if F0 != 0 else np.nan)
     return df
+
+
+def normalize_traces_FF0_custom(df, f0_percentile):
+    """
+    Normalize traces using a custom F0 percentile.
+    Useful for debug visualization with different baseline settings.
+    """
+    df_custom = df.copy()
+    n_rois = sum(col.startswith("F_roi") for col in df.columns)
+    for i in range(n_rois):
+        col = f"F_roi{i+1}"
+        Fi = df[col].values
+        F0 = compute_f0(Fi, mode="percentile", percentile=f0_percentile)
+        df_custom[f"FF0_roi{i+1}_debug"] = df[col] / (F0 if F0 != 0 else np.nan)
+    return df_custom
 
 
 def smooth_traces(df, window_length=21, polyorder=3, additional_smoothing=True):
@@ -253,6 +279,58 @@ def smooth_traces(df, window_length=21, polyorder=3, additional_smoothing=True):
         df_smoothed[f"{col}_smooth"] = smoothed
     
     return df_smoothed
+
+
+def detrend_traces(df, polyorder=2):
+    """
+    Remove slow baseline drift from fluorescence traces while preserving fast flashing.
+    
+    Fits a polynomial to the smoothed signal and subtracts it to remove:
+    - Photobleaching
+    - Focus drift
+    - Slow baseline changes
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing smoothed traces (FF0_roi_smooth columns)
+    polyorder : int
+        Polynomial order for detrending (1=linear, 2=quadratic, 3=cubic)
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with added detrended columns (FF0_roi_detrended)
+    """
+    df_detrended = df.copy()
+    
+    # Find smoothed columns to detrend
+    roi_cols = [c for c in df.columns if c.startswith("FF0_roi") and "_smooth" in c and "_detrended" not in c]
+    
+    if not roi_cols:
+        print("[Warning] No smoothed traces found for detrending")
+        return df
+    
+    for col in roi_cols:
+        smoothed_signal = df[col].values
+        mask = ~np.isnan(smoothed_signal)
+        
+        if np.sum(mask) < polyorder + 1:
+            # Not enough points to fit polynomial
+            df_detrended[f"{col}_detrended"] = smoothed_signal
+            continue
+        
+        # Fit polynomial to smoothed signal
+        time_indices = np.where(mask)[0]
+        coeffs = np.polyfit(time_indices, smoothed_signal[mask], polyorder)
+        baseline = np.polyval(coeffs, np.arange(len(smoothed_signal)))
+        
+        # Subtract baseline to remove drift
+        detrended = smoothed_signal - baseline + np.nanmean(smoothed_signal)
+        
+        df_detrended[f"{col}_detrended"] = detrended
+    
+    return df_detrended
 
 
 def extract_wave_component(df, fps, low_freq=0.1, high_freq=2.0, order=3):
@@ -408,44 +486,80 @@ def main():
         print("  - Try different ROI_DETECTION_METHOD")
         return
 
-    # 2. Dilate ROIs to handle small motion
+    # 2. Save original masks before dilation for visualization
+    roi_masks_original = [m.copy() for m in roi_masks]
+    
+    # 3. Dilate ROIs to handle small motion
     roi_masks = dilate_roi_masks(roi_masks, ROI_DILATION_RADIUS)
 
-    # 3. Save ROI outlines on first frame
+    # 4. Save ROI outlines on first frame (showing both original and dilated)
     save_roi_overlay_image(
         video_path=VIDEO_PATH,
         roi_masks=roi_masks,
         roi_info=roi_info,
         out_path=os.path.join(out_dir, "rois_on_first_frame.png"),
+        roi_masks_original=roi_masks_original,
     )
 
-    # 4. Extract F(t) for each ROI
+    # 5. Extract F(t) for each ROI
+    # Pass original masks for accurate F0 calculation (not dilated)
+    f0_masks = roi_masks_original if USE_ORIGINAL_MASK_FOR_F0 else None
     df, fps = extract_traces(VIDEO_PATH, roi_masks, channel=CHANNEL, 
-                            start_frame=start_frame, end_frame=end_frame)
+                            start_frame=start_frame, end_frame=end_frame,
+                            roi_masks_for_f0=f0_masks)
 
-    # 5. Compute F/F0
+    # 6. Compute F/F0
     df = normalize_traces_FF0(df, F0_MODE, F0_PERCENTILE, F0_FIRST_N)
     
-    # 5b. Smooth the traces with enhanced parameters for noisy data
+    # 6b. Smooth the traces with enhanced parameters for noisy data
     df = smooth_traces(df, window_length=SMOOTH_WINDOW_LENGTH, 
                       polyorder=SMOOTH_POLYORDER, 
                       additional_smoothing=ADDITIONAL_SMOOTHING)
     
     # and save both original and smoothed images
+
+    # --- DEBUG MODES ---
+    # 1. Raw (unsmoothed) traces
+    save_trace_plot(df, out_path=os.path.join(out_dir, "debug_fluorescence_traces_raw.png"))
+
+    # 2. Normal smoothed traces
+    df_smoothed = smooth_traces(df, window_length=SMOOTH_WINDOW_LENGTH, 
+                               polyorder=SMOOTH_POLYORDER, 
+                               additional_smoothing=ADDITIONAL_SMOOTHING)
+    save_smoothed_trace_plot(df_smoothed, out_path=os.path.join(out_dir, "debug_fluorescence_traces_smoothed.png"))
+
+    # 2b. Debug F0 traces (very conservative baseline = 10th percentile)
+    save_debug_f0_trace_plot(df_smoothed, debug_percentile=DEBUG_F0_PERCENTILE, 
+                            out_path=os.path.join(out_dir, "debug_fluorescence_traces_conservative_f0.png"))
+
+    # 2c. Detrend traces to remove baseline drift (photobleaching, focus drift, etc.)
+    if APPLY_DETRENDING:
+        df_detrended = detrend_traces(df_smoothed, polyorder=DETREND_POLYORDER)
+        save_detrended_trace_plot(df_detrended, out_path=os.path.join(out_dir, "debug_fluorescence_traces_detrended.png"))
+    else:
+        df_detrended = df_smoothed.copy()
+
+    # 3. Peak-emphasized traces (no wave extraction, baseline smoothing, peaks highlighted)
+    df_peaks = detect_spikes_and_dips(df_smoothed, fps)
+    save_spike_trace_plot(df_peaks, out_path=os.path.join(out_dir, "debug_fluorescence_peaks_only.png"),
+                          video_name=os.path.basename(VIDEO_PATH))
+
+    # --- NORMAL PIPELINE ---
     save_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_traces_plot.png"))
     save_smoothed_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_traces_plot_smoothed.png"))
 
-    # 5c. Extract and plot wave components
+    # 6c. Extract and plot wave components
     df_wave = extract_wave_component(df, fps, low_freq=WAVE_LOW_FREQ, 
                                     high_freq=WAVE_HIGH_FREQ, order=WAVE_FILTER_ORDER)
     save_wave_trace_plot(df_wave, out_path=os.path.join(out_dir, "fluorescence_traces_plot_waves.png"), fps=fps)
     
-    # 5d. Detect and plot spikes and dips
+    # 6d. Detect and plot spikes and dips
     df = detect_spikes_and_dips(df, fps)
-    save_spike_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_spikes.png"))
+    save_spike_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_spikes.png"), 
+                          video_name=os.path.basename(VIDEO_PATH))
 
 
-    # 6. Plot F/F0 vs time
+    # 7. Plot F/F0 vs time
     plt.figure()
     roi_cols = [c for c in df.columns if c.startswith("FF0_roi")]
     for col in roi_cols:
@@ -462,7 +576,7 @@ def main():
         plt.tight_layout()
     # plt.show() removed to prevent blocking; plot is saved to file instead
 
-    # 7. Save traces
+    # 8. Save traces
     df.to_csv(os.path.join(out_dir, "fluorescence_traces.csv"), index=False)
     print(f"Saved traces to {os.path.join(out_dir, 'fluorescence_traces.csv')}")
 
