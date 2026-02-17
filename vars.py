@@ -9,11 +9,11 @@ Modify these variables to adjust ROI detection and analysis parameters.
 
 ### "15_50_30_yuqi_pacing_Organoid3_Working_vid1.avi" ## this is good
 
-VIDEO_PATH = "17_05_47_QUAN_1.avi"  # Path to input video file
+VIDEO_PATH = "input_data/17_17_59_Cont_Organoid1_Fluoresent_Pacing_0.5Hz_20fps.avi"  # Path to input video file
 
 # Video clipping (to ignore portions of video)
-START_TIME_SEC = 3      # Start processing at this time (seconds)
-END_TIME_SEC = 5.2        # End processing at this time (seconds, 0 = end of video)
+START_TIME_SEC = 0      # Start processing at this time (seconds)
+END_TIME_SEC = 0        # End processing at this time (seconds, 0 = end of video)
 SKIP_FIRST_FRAMES = 0   # Skip this many frames at the start (alternative to START_TIME_SEC)
 
 # Choose which channel to use (0 = Blue, 1 = Green, 2 = Red)
@@ -30,13 +30,36 @@ MANUAL_ROI_SELECTION = True  # If True, allows user to draw ROI manually; if Fal
 # ==============================================================================
 
 # Select ROI detection method
-# Options: "static_reference", "temporal_std", "temporal_cv", "peak_frequency"
+# Options: "static_reference", "temporal_std", "temporal_cv", "peak_frequency", "single_organoid", "cellpose"
 # 
 # - "static_reference": Brightness-based (original method, not recommended for low contrast)
 # - "temporal_std": Standard deviation over time (good for flashing organoids)
 # - "temporal_cv": Coefficient of variation (best for dim but active organoids)
 # - "peak_frequency": Peak counting (good for periodic flashing)
-ROI_DETECTION_METHOD = "peak_frequency"
+# - "single_organoid": Detects ONE large circular organoid with edge-focused activity
+# - "cellpose": Deep learning based detection (RECOMMENDED - best accuracy)
+ROI_DETECTION_METHOD = "cellpose"
+
+
+# ==============================================================================
+# CELLPOSE DETECTION SETTINGS (for "cellpose" method - RECOMMENDED)
+# ==============================================================================
+
+# Cellpose uses a pre-trained deep learning model for cell/organoid segmentation
+# It automatically finds organoid boundaries with high accuracy
+CELLPOSE_DIAMETER = 200  # Expected organoid diameter in pixels (100-300 typical)
+
+
+# ==============================================================================
+# SINGLE ORGANOID DETECTION SETTINGS (for "single_organoid" method)
+# ==============================================================================
+
+# Detect a single large circular-ish organoid (for whole-organoid analysis)
+SINGLE_ORGANOID_MIN_AREA = 5000      # Minimum area in pixels for the organoid
+SINGLE_ORGANOID_MAX_AREA = 500000    # Maximum area in pixels
+SINGLE_ORGANOID_EDGE_ONLY = True     # If True, create annular mask focusing on edges
+SINGLE_ORGANOID_EDGE_WIDTH = 0.1     # Edge width as fraction of radius (0.3 = outer 30%)
+SINGLE_ORGANOID_CIRCULARITY = 0.4    # Minimum circularity (0-1, circle=1)
 
 
 # ==============================================================================
@@ -67,6 +90,12 @@ MAX_AREA = 1000  # Maximum ROI area in pixels (larger organoids)
 # ROI dilation to handle movement
 ROI_DILATION_RADIUS = 40  # Expand ROIs by this many pixels to handle motion (0 = no dilation)
 
+# F0 Calculation Strategy
+# If True: Calculate F0 from original (non-dilated) ROI mask for accurate baseline
+# If False: Calculate F0 from dilated ROI mask (may include background pixels)
+# Recommended: True (especially for stationary organoids)
+USE_ORIGINAL_MASK_FOR_F0 = True
+
 
 # ==============================================================================
 # F0 BASELINE SETTINGS
@@ -77,17 +106,25 @@ ROI_DILATION_RADIUS = 40  # Expand ROIs by this many pixels to handle motion (0 
 # "mean_first_n": Use mean of first N frames as baseline
 F0_MODE = "percentile"
 
-F0_PERCENTILE = 20  # Percentile for baseline (used if F0_MODE = "percentile")
-F0_FIRST_N = 50     # Number of frames for baseline (used if F0_MODE = "mean_first_n")
+F0_PERCENTILE = 10  # Percentile for baseline (used if F0_MODE = "percentile")
+F0_FIRST_N = 20     # Number of frames for baseline (used if F0_MODE = "mean_first_n")
+
+# Debug mode: Generate additional plot with very conservative F0 (10th percentile)
+# This shows maximum contrast for visualization purposes
+DEBUG_F0_PERCENTILE = 2  # Very conservative baseline for debug visualization
 
 
 # ==============================================================================
 # TRACE SMOOTHING SETTINGS
 # ==============================================================================
 
-SMOOTH_WINDOW_LENGTH = 21    # Window length for Savitzky-Golay filter (must be odd)
+SMOOTH_WINDOW_LENGTH = 5    # Window length for Savitzky-Golay filter (must be odd)
 SMOOTH_POLYORDER = 3         # Polynomial order for smoothing
-ADDITIONAL_SMOOTHING = True  # Apply additional moving average smoothing for noisy data
+ADDITIONAL_SMOOTHING = False  # Apply additional moving average smoothing for noisy data
+
+# Detrending: Remove slow baseline drift while preserving fast flashing
+APPLY_DETRENDING = True      # Remove baseline drift (photobleaching, focus drift, etc)
+DETREND_POLYORDER = 2        # Polynomial order for detrending (1=linear, 2=quadratic, 3=cubic)
 
 
 # ==============================================================================
