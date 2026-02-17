@@ -72,9 +72,8 @@ if mode == "Fluorescence Analysis":
     start_time = col_start.number_input("Start time (s)", min_value=0.0, value=0.0, step=1.0)
     end_time = col_end.number_input("End time (s, 0=end)", min_value=0.0, value=0.0, step=1.0)
 
-    channel_map = {"Blue (0)": 0, "Green (1)": 1, "Red (2)": 2}
-    channel_label = st.sidebar.selectbox("Channel", list(channel_map.keys()))
-    channel = channel_map[channel_label]
+    # Videos are grayscale — channel selection not needed, default to 0
+    channel = 0
 
     # ---- ROI Detection ----
     with st.sidebar.expander("ROI Detection", expanded=True):
