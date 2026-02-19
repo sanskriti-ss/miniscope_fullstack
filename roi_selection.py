@@ -140,10 +140,18 @@ def preview_video_and_draw_rois(video_path, n_preview_frames=150, channel=0, pre
         all_info.append(info)
         roi_counter += 1
         
-        # Ask if user wants to draw another ROI
+        # Ask if user wants to draw another ROI (use cv2 window instead of stdin)
         print(f"ROI #{roi_counter-1} created. Press 'n' for another ROI, any other key to finish.")
-        response = input().strip().lower()
-        if response != 'n':
+        # Show the frame with ROI drawn so waitKey has a window
+        prompt_img = cv2.cvtColor(avg_frame, cv2.COLOR_GRAY2BGR) if len(avg_frame.shape) == 2 else avg_frame.copy()
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(prompt_img, contours, -1, (0, 255, 0), 2)
+        cv2.putText(prompt_img, f"ROI #{roi_counter-1} drawn. 'n'=another, other=finish",
+                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.imshow("ROI Selection", prompt_img)
+        key = cv2.waitKey(0) & 0xFF
+        cv2.destroyWindow("ROI Selection")
+        if key != ord('n'):
             break
     
     return all_masks, all_info
