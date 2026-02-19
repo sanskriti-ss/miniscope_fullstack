@@ -77,13 +77,13 @@ def detect_organoid_cellpose(video_path, n_frames=30, diameter=None):
     best_mask = None
     best_area = 0
     h_img, w_img = enhanced.shape
-    min_organoid_area = h_img * w_img * 0.02  # At least 2% of image
+    min_organoid_area = h_img * w_img * 0.01  # At least 1% of image
 
     # Try inverted image first (bright organoid on dark background)
     for img_label, img_input in [("inverted", inverted), ("original", enhanced)]:
         if best_mask is not None:
             break
-        for d in [diameter, 250, 300, 200, 150, 0]:
+        for d in [diameter, 250, 0]:
             print(f"[Cellpose] Trying {img_label} image, diameter={d}...")
             masks_cp, flows, styles = model.eval(img_input, diameter=d if d > 0 else None)
             n_objects = masks_cp.max()
@@ -123,7 +123,7 @@ def detect_organoid_cellpose(video_path, n_frames=30, diameter=None):
     x, y, w, h = cv2.boundingRect(cnt)
 
     info = {
-        "label": best_id,
+        "label": 1,
         "area": int(best_area),
         "centroid": (float(cx), float(cy)),
         "bbox": (x, y, w, h),
