@@ -41,6 +41,7 @@ from helper_functions import (
     detect_spikes_and_dips,
 )
 from main_mech import (
+    detect_organoid,
     detect_organoid_cellpose,
     extract_contractility_traces,
     normalize_contractility,
@@ -422,7 +423,8 @@ def run_fluorescent(video_path, ts_path, metadata, out_dir, window_sec=20.0):
     }
 
 
-def run_mechanical(video_path, ts_path, metadata, out_dir, window_sec=20.0):
+def run_mechanical(video_path, ts_path, metadata, out_dir, window_sec=20.0,
+                   allow_manual=True):
     """Run mechanical / brightfield pipeline on a single video. Returns result dict."""
     os.makedirs(out_dir, exist_ok=True)
 
@@ -435,9 +437,9 @@ def run_mechanical(video_path, ts_path, metadata, out_dir, window_sec=20.0):
     ts_arr, real_fps = _load_timestamps_miniscope(ts_path)
     fps = real_fps if real_fps else 30.0
 
-    # Detect organoid
-    mask, info, ref_img = detect_organoid_cellpose(
-        video_path, n_frames=min(30, n_frames), diameter=200,
+    # Detect organoid — motion first, then manual/cellpose fallback
+    mask, info, ref_img = detect_organoid(
+        video_path, n_frames=min(200, n_frames), allow_manual=allow_manual,
     )
     if mask is None:
         print(f"  [WARN] No organoid detected — skipping")
@@ -685,7 +687,8 @@ def plot_comparison_by_pacing(results, out_path):
 # Step 5 — Batch Runner
 # ============================================================================
 
-def run_batch(root_folder, window_sec=20, out_dir="plots/batch_results"):
+def run_batch(root_folder, window_sec=20, out_dir="plots/batch_results",
+              allow_manual=True):
     os.makedirs(out_dir, exist_ok=True)
 
     # Discover
@@ -741,6 +744,7 @@ def run_batch(root_folder, window_sec=20, out_dir="plots/batch_results"):
                 result = run_mechanical(
                     entry["video_path"], entry["ts_path"], meta,
                     vid_out, window_sec=window_sec,
+                    allow_manual=allow_manual,
                 )
                 if result:
                     result["folder"] = entry["folder_name"]
@@ -825,9 +829,12 @@ def main():
                         help="Best-window length in seconds (default 20)")
     parser.add_argument("--out-dir", default="plots/batch_results",
                         help="Output directory (default plots/batch_results)")
+    parser.add_argument("--no-manual", action="store_true",
+                        help="Disable manual ROI fallback (fall through to cellpose)")
     args = parser.parse_args()
 
-    run_batch(args.input_dir, window_sec=args.window, out_dir=args.out_dir)
+    run_batch(args.input_dir, window_sec=args.window, out_dir=args.out_dir,
+              allow_manual=not args.no_manual)
 
 
 if __name__ == "__main__":
