@@ -285,6 +285,154 @@ def _fallback_threshold_detection(enhanced, ref_img):
     return mask, info
 
 
+def detect_organoid_motion(video_path, n_frames=200):
+    """Detect organoid via temporal std (motion map).
+
+    The organoid is a beating structure — pixels that change over time
+    will have high temporal standard deviation compared to the static
+    well background.
+
+    Returns (mask, info, ref_img) or (None, None, ref_img).
+    """
+    print("[Motion] Reading frames for temporal std...")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video {video_path}")
+
+    frames = []
+    for _ in range(n_frames):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(extract_frame_gray(frame))
+    cap.release()
+
+    if len(frames) < 10:
+        print("[Motion] Too few frames, cannot compute motion map")
+        ref_img = frames[0].astype(np.uint8) if frames else np.zeros((100, 100), np.uint8)
+        return None, None, ref_img
+
+    stack = np.stack(frames, axis=0)  # (N, H, W)
+    ref_img = cv2.normalize(np.mean(stack, axis=0), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    # Temporal std — high where pixels change (beating organoid)
+    motion_map = np.std(stack, axis=0)
+    motion_map = gaussian_filter(motion_map, sigma=5)
+    motion_uint8 = cv2.normalize(motion_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    cv2.imwrite("debug_mech_motion_map.png", motion_uint8)
+    print("[Motion] Saved debug_mech_motion_map.png")
+
+    # Threshold at 70th percentile
+    thresh_val = np.percentile(motion_uint8, 70)
+    _, binary = cv2.threshold(motion_uint8, int(thresh_val), 255, cv2.THRESH_BINARY)
+
+    # Morphological cleanup
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=3)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
+
+    # Vignette mask — zero out outer 5% ring to ignore dish rim
+    h, w = binary.shape
+    vignette = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(vignette, (w // 2, h // 2), int(min(w, h) * 0.45), 255, -1)
+    binary = cv2.bitwise_and(binary, vignette)
+
+    # Find and score contours
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        print("[Motion] No contours found")
+        return None, None, ref_img
+
+    img_cx, img_cy = w / 2.0, h / 2.0
+    half_diag = np.sqrt(img_cx ** 2 + img_cy ** 2)
+    min_area = h * w * 0.01  # at least 1% of image
+
+    best_score = -1
+    best_cnt = None
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < min_area:
+            continue
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter == 0:
+            continue
+        circularity = 4 * np.pi * area / (perimeter ** 2)
+        M = cv2.moments(cnt)
+        if M["m00"] == 0:
+            continue
+        cx = M["m10"] / M["m00"]
+        cy = M["m01"] / M["m00"]
+        dist = np.sqrt((cx - img_cx) ** 2 + (cy - img_cy) ** 2)
+        center_proximity = 1.0 - dist / half_diag
+        score = area * (circularity ** 2) * center_proximity
+        print(f"  [Motion] contour: area={area:.0f}, circ={circularity:.2f}, "
+              f"center_prox={center_proximity:.2f}, score={score:.0f}")
+        if score > best_score:
+            best_score = score
+            best_cnt = cnt
+
+    if best_cnt is None:
+        print("[Motion] No suitable contour found")
+        return None, None, ref_img
+
+    # Build binary mask (0/1 uint8)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.drawContours(mask, [best_cnt], -1, 1, -1)
+
+    area = cv2.contourArea(best_cnt)
+    M = cv2.moments(best_cnt)
+    cx = int(M["m10"] / M["m00"])
+    cy = int(M["m01"] / M["m00"])
+    x, y, bw, bh = cv2.boundingRect(best_cnt)
+    info = {
+        "label": 1,
+        "area": int(area),
+        "centroid": (float(cx), float(cy)),
+        "bbox": (x, y, bw, bh),
+    }
+    print(f"[Motion] Detected organoid: area={info['area']} px, center=({cx},{cy})")
+
+    # Debug overlay
+    debug_img = cv2.cvtColor(ref_img, cv2.COLOR_GRAY2BGR)
+    cv2.drawContours(debug_img, [best_cnt], -1, (0, 255, 0), 2)
+    cv2.circle(debug_img, (cx, cy), 5, (0, 0, 255), -1)
+    cv2.imwrite("debug_mech_motion_detection.png", debug_img)
+    print("[Motion] Saved debug_mech_motion_detection.png")
+
+    return mask, info, ref_img
+
+
+def detect_organoid(video_path, n_frames=200, allow_manual=True):
+    """Try motion-based detection, then manual fallback, then cellpose.
+
+    Returns (mask, info, ref_img) — same signature as detect_organoid_cellpose().
+    """
+    # 1. Motion-based detection
+    print("[Detect] Trying motion-based organoid detection...")
+    mask, info, ref_img = detect_organoid_motion(video_path, n_frames=n_frames)
+    if mask is not None:
+        print("[Detect] Motion detection succeeded!")
+        return mask, info, ref_img
+
+    # 2. Manual fallback
+    if allow_manual:
+        print("[Detect] WARNING: Auto-detection failed, opening manual selection...")
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced_ref = clahe.apply(ref_img)
+
+        from roi_selection import manual_roi_selection
+        manual_mask, manual_info = manual_roi_selection(enhanced_ref, roi_number=1)
+        if manual_mask is not None:
+            # Normalize mask — manual_roi_selection returns 255-valued mask
+            mask = (manual_mask > 0).astype(np.uint8)
+            return mask, manual_info, ref_img
+        print("[Detect] Manual selection cancelled, falling back to cellpose...")
+
+    # 3. Cellpose fallback (batch/headless mode, or manual cancelled)
+    print("[Detect] Falling back to cellpose detection...")
+    return detect_organoid_cellpose(video_path, n_frames=min(30, n_frames))
+
+
 def create_padded_roi(mask, pad_fraction=0.3):
     """
     Create a padded ROI around the cellpose mask.
