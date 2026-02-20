@@ -23,8 +23,19 @@ DRUG_COLORS = {
 }
 VIDEO_TYPES = ["fluorescent", "mechanical"]
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "plots",
-                         "batch_results", "all_results.csv")
+def _find_latest_batch_results():
+    """Find the highest-numbered plots/batch_results[N] directory."""
+    plots_dir = os.path.join(os.path.dirname(__file__), "..", "plots")
+    best = os.path.join(plots_dir, "batch_results")
+    if not os.path.exists(best):
+        return best  # fallback
+    n = 2
+    while os.path.exists(os.path.join(plots_dir, f"batch_results{n}")):
+        best = os.path.join(plots_dir, f"batch_results{n}")
+        n += 1
+    return best
+
+DATA_PATH = os.path.join(_find_latest_batch_results(), "all_results.csv")
 OUT_DIR = os.path.join(os.path.dirname(__file__), "outputs")
 
 # All possible metrics per video type (col_name -> display label)

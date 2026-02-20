@@ -366,6 +366,10 @@ def run_fluorescent(video_path, ts_path, metadata, out_dir, window_sec=20.0):
     bpm = 0.0
     amplitude = 0.0
     spike_count = 0
+    beat_regularity_cv = np.nan
+    rise_time_ms = np.nan
+    decay_time_ms = np.nan
+    transient_duration_ms = np.nan
     w_start, w_end = 0, len(df)
 
     if sig_col:
@@ -386,20 +390,74 @@ def run_fluorescent(video_path, ts_path, metadata, out_dir, window_sec=20.0):
             base_col = re.sub(r"_smooth$|_detrended$", "", sig_col)
             spike_col = base_col + "_spike"
 
+        spike_intervals = None
         if spike_col in df_win.columns:
             spike_idx = df_win.index[df_win[spike_col] > 0].values
             spike_count = len(spike_idx)
             if spike_count >= 2:
-                intervals = np.diff(df_win.loc[spike_idx, "time_s"].values)
-                bpm = 60.0 / np.mean(intervals)
+                spike_intervals = np.diff(df_win.loc[spike_idx, "time_s"].values)
+                bpm = 60.0 / np.mean(spike_intervals)
+                # Beat regularity (CV%)
+                if np.mean(spike_intervals) > 0:
+                    beat_regularity_cv = float(
+                        np.std(spike_intervals) / np.mean(spike_intervals) * 100
+                    )
 
         # Amplitude from peaks in window
         win_sig = df_win[sig_col].values if sig_col in df_win.columns else None
+        win_time = df_win["time_s"].values
         if win_sig is not None:
             baseline = np.median(win_sig)
             peaks_idx, props = find_peaks(win_sig - baseline, prominence=0.003)
             if len(peaks_idx) > 0:
                 amplitude = float(np.mean(props["prominences"]))
+
+            # Rise time, decay time, transient duration from averaged beat
+            if len(peaks_idx) >= 2:
+                # Segment signal into individual beats (peak-to-peak)
+                beats = []
+                beat_durations_s = []
+                for bi in range(len(peaks_idx) - 1):
+                    seg = win_sig[peaks_idx[bi]:peaks_idx[bi + 1]]
+                    seg_t = win_time[peaks_idx[bi]:peaks_idx[bi + 1]]
+                    if len(seg) > 4:
+                        beat_durations_s.append(seg_t[-1] - seg_t[0])
+                        interp_seg = np.interp(
+                            np.linspace(0, 1, 50),
+                            np.linspace(0, 1, len(seg)), seg,
+                        )
+                        beats.append(interp_seg)
+
+                if beats:
+                    avg_beat = np.mean(beats, axis=0)
+                    avg_dur_ms = np.mean(beat_durations_s) * 1000.0
+                    peak_idx_avg = np.argmax(avg_beat)
+                    beat_min = np.min(avg_beat)
+                    beat_max = np.max(avg_beat)
+                    r10 = beat_min + 0.1 * (beat_max - beat_min)
+                    r90 = beat_min + 0.9 * (beat_max - beat_min)
+
+                    # Rise time: 10% to 90% on upstroke
+                    upstroke = avg_beat[:peak_idx_avg + 1] if peak_idx_avg > 0 else avg_beat
+                    t10 = np.searchsorted(upstroke, r10)
+                    t90 = np.searchsorted(upstroke, r90)
+                    rise_time_ms = float((t90 - t10) / 50.0 * avg_dur_ms)
+
+                    # Decay time: 90% to 10% on downstroke
+                    downstroke = avg_beat[peak_idx_avg:]
+                    d90 = np.searchsorted(-downstroke, -r90)
+                    d10 = np.searchsorted(-downstroke, -r10)
+                    decay_time_ms = float(abs(d10 - d90) / 50.0 * avg_dur_ms)
+
+                    # Transient duration at 50% height
+                    half = beat_min + 0.5 * (beat_max - beat_min)
+                    above_half = avg_beat > half
+                    if np.any(above_half):
+                        first_above = np.argmax(above_half)
+                        last_above = len(above_half) - 1 - np.argmax(above_half[::-1])
+                        transient_duration_ms = float(
+                            (last_above - first_above) / 50.0 * avg_dur_ms
+                        )
     else:
         df_win = df
 
@@ -414,6 +472,10 @@ def run_fluorescent(video_path, ts_path, metadata, out_dir, window_sec=20.0):
         "bpm": bpm,
         "amplitude": amplitude,
         "spike_count": spike_count,
+        "beat_regularity_cv": beat_regularity_cv,
+        "rise_time_ms": rise_time_ms,
+        "decay_time_ms": decay_time_ms,
+        "transient_duration_ms": transient_duration_ms,
         "windowed_trace": df_win[sig_col].values if sig_col and sig_col in df_win.columns else None,
         "windowed_time": df_win["time_s"].values,
         "window_start": float(df["time_s"].values[w_start]),
@@ -472,6 +534,10 @@ def run_mechanical(video_path, ts_path, metadata, out_dir, window_sec=20.0,
     bpm = 0.0
     amplitude = 0.0
     contraction_count = 0
+    beat_regularity_cv = np.nan
+    contraction_velocity_pct_s = np.nan
+    relaxation_velocity_pct_s = np.nan
+    contraction_duration_ms = np.nan
     w_start, w_end = 0, len(df)
 
     if sig_col in df.columns:
@@ -491,12 +557,55 @@ def run_mechanical(video_path, ts_path, metadata, out_dir, window_sec=20.0,
 
         # Amplitude from fixed_mask_intensity_smooth peaks
         int_sig = df_win[sig_col].values
+        win_time = df_win["time_s"].values
         int_peaks, int_props = find_peaks(int_sig, prominence=0.002, distance=max(5, int(fps * 1.0)))
         if len(int_peaks) > 0 and "prominences" in int_props:
             amplitude = float(np.mean(int_props["prominences"]))
         if len(int_peaks) > 1:
-            int_intervals = np.diff(df_win["time_s"].values[int_peaks])
+            int_intervals = np.diff(win_time[int_peaks])
             bpm = 60.0 / np.mean(int_intervals)
+            # Beat regularity (CV%)
+            if np.mean(int_intervals) > 0:
+                beat_regularity_cv = float(
+                    np.std(int_intervals) / np.mean(int_intervals) * 100
+                )
+
+        # Contraction/relaxation velocity from signal derivative
+        baseline = np.percentile(int_sig, 90)
+        if baseline > 0:
+            dt = np.gradient(win_time)
+            dsig = np.gradient(int_sig, win_time)
+            # Contraction = signal decreasing (area shrinks), relaxation = signal increasing
+            contraction_velocity_pct_s = float(np.abs(np.min(dsig)) / baseline * 100)
+            relaxation_velocity_pct_s = float(np.abs(np.max(dsig)) / baseline * 100)
+
+        # Contraction duration at 50% depth from averaged beat
+        if len(int_peaks) >= 2:
+            beats_mech = []
+            beat_durations_s = []
+            for bi in range(len(int_peaks) - 1):
+                seg = int_sig[int_peaks[bi]:int_peaks[bi + 1]]
+                seg_t = win_time[int_peaks[bi]:int_peaks[bi + 1]]
+                if len(seg) > 4:
+                    beat_durations_s.append(seg_t[-1] - seg_t[0])
+                    interp_seg = np.interp(
+                        np.linspace(0, 1, 50),
+                        np.linspace(0, 1, len(seg)), seg,
+                    )
+                    beats_mech.append(interp_seg)
+            if beats_mech:
+                avg_beat = np.mean(beats_mech, axis=0)
+                avg_dur_ms = np.mean(beat_durations_s) * 1000.0
+                beat_min = np.min(avg_beat)
+                beat_max = np.max(avg_beat)
+                half = beat_max - 0.5 * (beat_max - beat_min)
+                below_half = avg_beat < half
+                if np.any(below_half):
+                    first_below = np.argmax(below_half)
+                    last_below = len(below_half) - 1 - np.argmax(below_half[::-1])
+                    contraction_duration_ms = float(
+                        (last_below - first_below) / 50.0 * avg_dur_ms
+                    )
     else:
         df_win = df
 
@@ -507,6 +616,10 @@ def run_mechanical(video_path, ts_path, metadata, out_dir, window_sec=20.0,
         "bpm": bpm,
         "amplitude": amplitude,
         "contraction_count": contraction_count,
+        "beat_regularity_cv": beat_regularity_cv,
+        "contraction_velocity_pct_s": contraction_velocity_pct_s,
+        "relaxation_velocity_pct_s": relaxation_velocity_pct_s,
+        "contraction_duration_ms": contraction_duration_ms,
         "windowed_trace": df_win[sig_col].values if sig_col in df_win.columns else None,
         "windowed_time": df_win["time_s"].values,
         "window_start": float(df["time_s"].values[w_start]),
@@ -765,7 +878,7 @@ def run_batch(root_folder, window_sec=20, out_dir="plots/batch_results",
         rows = []
         for r in all_results:
             m = r["metadata"]
-            rows.append({
+            row = {
                 "folder": r.get("folder"),
                 "avi": r.get("avi"),
                 "drug": m.get("drug"),
@@ -779,7 +892,19 @@ def run_batch(root_folder, window_sec=20, out_dir="plots/batch_results",
                 "duration": r.get("duration"),
                 "window_start": r.get("window_start"),
                 "window_end": r.get("window_end"),
-            })
+                "beat_regularity_cv": r.get("beat_regularity_cv"),
+            }
+            # Fluorescent-specific
+            if r.get("video_type") == "fluorescent":
+                row["rise_time_ms"] = r.get("rise_time_ms")
+                row["decay_time_ms"] = r.get("decay_time_ms")
+                row["transient_duration_ms"] = r.get("transient_duration_ms")
+            # Mechanical-specific
+            if r.get("video_type") == "mechanical":
+                row["contraction_velocity_pct_s"] = r.get("contraction_velocity_pct_s")
+                row["relaxation_velocity_pct_s"] = r.get("relaxation_velocity_pct_s")
+                row["contraction_duration_ms"] = r.get("contraction_duration_ms")
+            rows.append(row)
         csv_path = os.path.join(out_dir, "all_results.csv")
         pd.DataFrame(rows).to_csv(csv_path, index=False)
         print(f"\n[Data] Saved {csv_path}")
@@ -827,13 +952,24 @@ def main():
                         help="Root folder containing experiment subfolders")
     parser.add_argument("--window", type=float, default=20.0,
                         help="Best-window length in seconds (default 20)")
-    parser.add_argument("--out-dir", default="plots/batch_results",
-                        help="Output directory (default plots/batch_results)")
+    parser.add_argument("--out-dir", default=None,
+                        help="Output directory (default: auto-incremented plots/batch_resultsN)")
     parser.add_argument("--no-manual", action="store_true",
                         help="Disable manual ROI fallback (fall through to cellpose)")
     args = parser.parse_args()
 
-    run_batch(args.input_dir, window_sec=args.window, out_dir=args.out_dir,
+    out_dir = args.out_dir
+    if out_dir is None:
+        base = "plots/batch_results"
+        if not os.path.exists(base):
+            out_dir = base
+        else:
+            n = 2
+            while os.path.exists(f"{base}{n}"):
+                n += 1
+            out_dir = f"{base}{n}"
+
+    run_batch(args.input_dir, window_sec=args.window, out_dir=out_dir,
               allow_manual=not args.no_manual)
 
 
