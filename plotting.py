@@ -422,6 +422,106 @@ def save_spike_trace_plot(df, out_path="fluorescence_spikes.png", video_name=Non
     print(f"Saved spike trace plot to {out_path}")
 
 
+def save_spike_trend_plot(df, out_path="fluorescence_spikes_trend.png", video_name=None,
+                          smooth_window_sec=0.3, smooth_polyorder=2):
+    """
+    Plots raw fluorescence trace faded in the background with a smoothed trend
+    overlaid on top. Spikes and dips are detected and marked on the smooth curve.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with fluorescence traces (needs FF0_roi columns and spike/dip columns)
+    out_path : str
+        Output file path
+    video_name : str, optional
+        Name of the source video file to include in the title
+    smooth_window_sec : float
+        Smoothing window in seconds for the trend line
+    smooth_polyorder : int
+        Polynomial order for Savitzky-Golay smoothing of the trend
+    """
+    from scipy.signal import savgol_filter, find_peaks
+
+    roi_cols = [c for c in df.columns if re.match(r"FF0_roi\d+$", c)]
+
+    if len(roi_cols) == 0:
+        raise ValueError("No FF0 columns found in dataframe")
+
+    n_rois = len(roi_cols)
+    n_cols = min(3, n_rois)
+    n_rows = (n_rois + n_cols - 1) // n_cols
+
+    fig = plt.figure(figsize=(15, 2.8 * n_rows + 0.4))
+
+    # Estimate fps from the time column
+    time = df["time_s"].values
+    if len(time) > 1:
+        dt = np.median(np.diff(time))
+        fps_est = 1.0 / dt if dt > 0 else 25.0
+    else:
+        fps_est = 25.0
+
+    # Compute smoothing window in samples (must be odd)
+    win = int(smooth_window_sec * fps_est)
+    if win % 2 == 0:
+        win += 1
+    win = max(5, win)
+
+    for idx, col in enumerate(roi_cols):
+        roi_num = col.split('_')[-1].replace('roi', '')
+        ax = plt.subplot(n_rows, n_cols, idx + 1)
+
+        raw = df[col].values
+
+        # Build smoothed trend
+        mask = ~np.isnan(raw)
+        smoothed = raw.copy()
+        if np.sum(mask) >= win:
+            smoothed[mask] = savgol_filter(raw[mask], win, smooth_polyorder)
+
+        # Plot raw trace faded in background
+        ax.plot(time, raw, color='#7fb3e0', linewidth=0.8, alpha=0.45, label='Raw F/F0')
+
+        # Plot smoothed trend on top
+        ax.plot(time, smoothed, color='#1a5fa1', linewidth=2, alpha=0.95, label='Smoothed trend')
+
+        # Detect peaks and dips on the smoothed curve
+        signal_range = np.percentile(smoothed[mask], 95) - np.percentile(smoothed[mask], 5)
+        prominence = max(0.002, signal_range * 0.25)
+        min_distance = max(1, int(0.4 * fps_est))
+
+        peaks, _ = find_peaks(smoothed, distance=min_distance, prominence=prominence)
+        dips, _ = find_peaks(-smoothed, distance=min_distance, prominence=prominence)
+
+        if len(peaks) > 0:
+            ax.scatter(time[peaks], smoothed[peaks], color='red', s=35,
+                      marker='^', alpha=0.9, label=f'Spikes ({len(peaks)})', zorder=5)
+        if len(dips) > 0:
+            ax.scatter(time[dips], smoothed[dips], color='green', s=35,
+                      marker='v', alpha=0.9, label=f'Dips ({len(dips)})', zorder=5)
+
+        ax.set_xlabel("Time (s)", fontsize=9)
+        ax.set_ylabel("F/F0", fontsize=9)
+        ax.set_title(f"ROI {roi_num} - Calcium Transients (Smoothed)", fontsize=10, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=8)
+
+    if video_name:
+        fig.suptitle(video_name, fontsize=11, fontweight='bold')
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
+    else:
+        plt.tight_layout()
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved spike trend plot to {out_path}")
+
+
 def save_detrended_trace_plot(df, out_path="fluorescence_traces_detrended.png"):
     """
     Plots smoothed fluorescence traces with baseline drift removed (detrended).

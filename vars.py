@@ -9,14 +9,20 @@ Modify these variables to adjust ROI detection and analysis parameters.
 
 ### "15_50_30_yuqi_pacing_Organoid3_Working_vid1.avi" ## this is good
 
-VIDEO_PATH = "input_data/17_17_59_Cont_Organoid1_Fluoresent_Pacing_0.5Hz_20fps.avi"  # Path to input video file
+VIDEO_PATH = "/Users/sanskriti/Downloads/15_18_35_0.1nM_Thar4_Fluoresent_0.5Hz_25fps/My_V4_Miniscope/15_18_35_0.1nM_Thar4_Fluoresent_0.5Hz_25fps_vid0.avi"
+# 2026_02_19/16_01_01_100nM_DOF1_Fluoresent_0.5Hz_25fps/My_V4_Miniscope/16_01_01_100nM_DOF1_Fluoresent_0.5Hz_25fps_vid0.avi
+# 2026_02_18/17_25_00_QUAN3_30nM_Flo_0.5Hz_25fps/My_V4_Miniscope/17_25_00_QUAN3_30nM_Flo_0.5Hz_25fps_vid0.avi"  # Path to input video file
 
 # Video clipping (to ignore portions of video)
 START_TIME_SEC = 0      # Start processing at this time (seconds)
-END_TIME_SEC = 0        # End processing at this time (seconds, 0 = end of video)
+END_TIME_SEC = 20        # End processing at this time (seconds, 0 = end of video)
 SKIP_FIRST_FRAMES = 0   # Skip this many frames at the start (alternative to START_TIME_SEC)
 
-# Choose which channel to use (0 = Blue, 1 = Green, 2 = Red)
+# Plot clipping: only plot the first N seconds (applied after all processing)
+# Set to 0 or None to plot everything
+PLOT_CLIP_SEC = 15
+
+# Choose which channel to use (0 = Blue, 1 = Green, 2 = Red) WE HAVE NOT IMPLEMENTED
 # NOTE: If your video is grayscale (black/white), channel selection has no effect
 #       All channels will be identical for grayscale videos
 CHANNEL = 0  # Use 0 for grayscale or any channel for color videos

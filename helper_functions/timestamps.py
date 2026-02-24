@@ -28,9 +28,22 @@ def load_timestamps_from_file(video_path):
     # Construct expected timestamp file path
     video_dir = os.path.dirname(video_path)
     video_basename = os.path.splitext(os.path.basename(video_path))[0]
-    timestamp_file = os.path.join(video_dir, f"{video_basename}_timeStamps.csv")
-    
-    if not os.path.exists(timestamp_file):
+
+    # Try multiple naming conventions:
+    # 1. {basename}_timeStamps.csv  (custom)
+    # 2. timeStamps.csv             (Miniscope v4 default)
+    candidates = [
+        os.path.join(video_dir, f"{video_basename}_timeStamps.csv"),
+        os.path.join(video_dir, "timeStamps.csv"),
+    ]
+
+    timestamp_file = None
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            timestamp_file = candidate
+            break
+
+    if timestamp_file is None:
         return None
     
     print(f"[Timestamps] Found timestamp file: {timestamp_file}")
@@ -41,8 +54,9 @@ def load_timestamps_from_file(video_path):
         
         # Try to find the time column (common names)
         time_col = None
-        for col_name in ['time', 'Time', 'time_s', 'Time_s', 'timestamp', 'Timestamp', 
-                         'time_sec', 'Time_Sec', 'timeStamp', 'TimeStamp']:
+        for col_name in ['time', 'Time', 'time_s', 'Time_s', 'timestamp', 'Timestamp',
+                         'time_sec', 'Time_Sec', 'timeStamp', 'TimeStamp',
+                         'Time Stamp (ms)', 'Time Stamp (s)']:
             if col_name in ts_df.columns:
                 time_col = col_name
                 break

@@ -14,9 +14,9 @@ from vars import *
 # Import ROI detection strategies
 from roi_detection import detect_rois_dispatcher
 # Import plotting functions
-from plotting import (save_roi_overlay_image, save_trace_plot, 
-                     save_smoothed_trace_plot, save_wave_trace_plot, 
-                     save_spike_trace_plot, save_debug_f0_trace_plot,
+from plotting import (save_roi_overlay_image, save_trace_plot,
+                     save_smoothed_trace_plot, save_wave_trace_plot,
+                     save_spike_trace_plot, save_spike_trend_plot,
                      save_detrended_trace_plot)
 # Import shared ROI selection functions
 from roi_selection import preview_video_and_draw_rois, extract_frame_channel
@@ -117,52 +117,63 @@ def main():
     
     # and save both original and smoothed images
 
+    # --- Apply plot clipping if enabled ---
+    def clip_df(dataframe):
+        """Clip dataframe to PLOT_CLIP_SEC if set."""
+        if PLOT_CLIP_SEC and PLOT_CLIP_SEC > 0:
+            return dataframe[dataframe["time_s"] <= PLOT_CLIP_SEC].copy()
+        return dataframe
+
+    if PLOT_CLIP_SEC and PLOT_CLIP_SEC > 0:
+        print(f"[Plot Clipping] Only plotting first {PLOT_CLIP_SEC} seconds")
+
     # --- DEBUG MODES ---
     # 1. Raw (unsmoothed) traces
-    save_trace_plot(df, out_path=os.path.join(out_dir, "debug_fluorescence_traces_raw.png"))
+    save_trace_plot(clip_df(df), out_path=os.path.join(out_dir, "debug_fluorescence_traces_raw.png"))
 
     # 2. Normal smoothed traces
-    df_smoothed = smooth_traces(df, window_length=SMOOTH_WINDOW_LENGTH, 
-                               polyorder=SMOOTH_POLYORDER, 
+    df_smoothed = smooth_traces(df, window_length=SMOOTH_WINDOW_LENGTH,
+                               polyorder=SMOOTH_POLYORDER,
                                additional_smoothing=ADDITIONAL_SMOOTHING)
-    save_smoothed_trace_plot(df_smoothed, out_path=os.path.join(out_dir, "debug_fluorescence_traces_smoothed.png"))
+    save_smoothed_trace_plot(clip_df(df_smoothed), out_path=os.path.join(out_dir, "debug_fluorescence_traces_smoothed.png"))
 
-    # 2b. Debug F0 traces (very conservative baseline = 10th percentile)
-    save_debug_f0_trace_plot(df_smoothed, debug_percentile=DEBUG_F0_PERCENTILE, 
-                            out_path=os.path.join(out_dir, "debug_fluorescence_traces_conservative_f0.png"))
-
-    # 2c. Detrend traces to remove baseline drift (photobleaching, focus drift, etc.)
+    # 2b. Detrend traces to remove baseline drift (photobleaching, focus drift, etc.)
     if APPLY_DETRENDING:
         df_detrended = detrend_traces(df_smoothed, polyorder=DETREND_POLYORDER)
-        save_detrended_trace_plot(df_detrended, out_path=os.path.join(out_dir, "debug_fluorescence_traces_detrended.png"))
+        save_detrended_trace_plot(clip_df(df_detrended), out_path=os.path.join(out_dir, "debug_fluorescence_traces_detrended.png"))
     else:
         df_detrended = df_smoothed.copy()
 
     # 3. Peak-emphasized traces (no wave extraction, baseline smoothing, peaks highlighted)
     df_peaks = detect_spikes_and_dips(df_smoothed, fps)
-    save_spike_trace_plot(df_peaks, out_path=os.path.join(out_dir, "debug_fluorescence_peaks_only.png"),
+    save_spike_trace_plot(clip_df(df_peaks), out_path=os.path.join(out_dir, "debug_fluorescence_peaks_only.png"),
                           video_name=os.path.basename(VIDEO_PATH))
 
     # --- NORMAL PIPELINE ---
-    save_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_traces_plot.png"))
-    save_smoothed_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_traces_plot_smoothed.png"))
+    save_trace_plot(clip_df(df), out_path=os.path.join(out_dir, "fluorescence_traces_plot.png"))
+    save_smoothed_trace_plot(clip_df(df), out_path=os.path.join(out_dir, "fluorescence_traces_plot_smoothed.png"))
 
     # 6c. Extract and plot wave components
-    df_wave = extract_wave_component(df, fps, low_freq=WAVE_LOW_FREQ, 
+    df_wave = extract_wave_component(df, fps, low_freq=WAVE_LOW_FREQ,
                                     high_freq=WAVE_HIGH_FREQ, order=WAVE_FILTER_ORDER)
-    save_wave_trace_plot(df_wave, out_path=os.path.join(out_dir, "fluorescence_traces_plot_waves.png"), fps=fps)
-    
+    save_wave_trace_plot(clip_df(df_wave), out_path=os.path.join(out_dir, "fluorescence_traces_plot_waves.png"), fps=fps)
+
     # 6d. Detect and plot spikes and dips
     df = detect_spikes_and_dips(df, fps)
-    save_spike_trace_plot(df, out_path=os.path.join(out_dir, "fluorescence_spikes.png"), 
+    save_spike_trace_plot(clip_df(df), out_path=os.path.join(out_dir, "fluorescence_spikes.png"),
+                          video_name=os.path.basename(VIDEO_PATH))
+
+    # 6e. Smoothed trend with raw overlay and spike/dip markers
+    save_spike_trend_plot(clip_df(df), out_path=os.path.join(out_dir, "fluorescence_spikes_trend.png"),
                           video_name=os.path.basename(VIDEO_PATH))
 
 
     # 7. Plot F/F0 vs time
+    df_plot = clip_df(df)
     plt.figure()
-    roi_cols = [c for c in df.columns if c.startswith("FF0_roi")]
+    roi_cols = [c for c in df_plot.columns if c.startswith("FF0_roi")]
     for col in roi_cols:
-        plt.plot(df["time_s"], df[col], label=col)
+        plt.plot(df_plot["time_s"], df_plot[col], label=col)
     plt.xlabel("Time (s)")
     plt.ylabel("F/F0")
     
