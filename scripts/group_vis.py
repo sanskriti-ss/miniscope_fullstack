@@ -334,7 +334,7 @@ def process_experiment_folder(plots_dir: str, segment_duration: float = 4.0) -> 
             wave_score = calculate_wave_character(segment_signal)
             
             # Calculate beat frequency using both methods
-            freq_fft = estimate_dominant_frequency(segment_signal, fps=30.0)
+            freq_fft = estimate_dominant_frequency(segment_signal, fps=25.0)
             freq_peaks = estimate_beat_frequency_peaks(segment_signal, segment_time)
             
             # Use the more reasonable frequency (prefer peaks method for biological signals)

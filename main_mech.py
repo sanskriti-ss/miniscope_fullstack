@@ -420,7 +420,7 @@ def detect_organoid(video_path, n_frames=200, allow_manual=True):
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced_ref = clahe.apply(ref_img)
 
-        from roi_selection import manual_roi_selection
+        from helper_functions.roi_selection import manual_roi_selection
         manual_mask, manual_info = manual_roi_selection(enhanced_ref, roi_number=1)
         if manual_mask is not None:
             # Normalize mask — manual_roi_selection returns 255-valued mask
@@ -459,7 +459,7 @@ def create_padded_roi(mask, pad_fraction=0.3):
 
 
 def extract_contractility_traces(video_path, organoid_mask, roi_mask,
-                                  start_frame=0, end_frame=None, fps=30.0):
+                                  start_frame=0, end_frame=None, fps=25.0):
     """
     Extract frame-by-frame contractility metrics from brightfield video.
 
@@ -596,7 +596,7 @@ def extract_contractility_traces(video_path, organoid_mask, roi_mask,
     return df, fps
 
 
-def normalize_contractility(df, fps=30.0):
+def normalize_contractility(df, fps=25.0):
     """
     Normalize contractility metrics to fractional change from baseline.
     Baseline = median of full trace (robust to outliers).
@@ -648,7 +648,7 @@ def normalize_contractility(df, fps=30.0):
     return df_out
 
 
-def detect_contractions(df, metric='area_smooth', fps=30.0, prominence=0.005):
+def detect_contractions(df, metric='area_smooth', fps=25.0, prominence=0.005):
     """Detect contraction events (dips in area = contractions)."""
     if metric not in df.columns:
         return np.array([]), {}, 0.0
@@ -840,6 +840,8 @@ def main():
                         help="Cellpose diameter parameter")
     parser.add_argument("--fps", type=float, default=30.0,
                         help="Override FPS (useful when metadata is wrong)")
+    parser.add_argument("--manual", action="store_true",
+                        help="Use manual ROI selection instead of auto-detection")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -880,11 +882,21 @@ def main():
     print(f"  Readable frames: {total_frames}, Size: {w}x{h}")
     print(f"  FPS: {fps:.1f}")
 
-    # 1. Detect organoid with Cellpose
-    print(f"\n[Step 1] Detecting organoid with Cellpose...")
-    mask, info, ref_img = detect_organoid_cellpose(
-        video_path, n_frames=min(30, total_frames), diameter=args.diameter
-    )
+    # 1. Detect organoid
+    if args.manual:
+        print(f"\n[Step 1] Manual ROI selection...")
+        ref_img = build_mean_image(video_path, n_frames=30)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced_ref = clahe.apply(ref_img)
+        from helper_functions.roi_selection import manual_roi_selection
+        mask, info = manual_roi_selection(enhanced_ref, roi_number=1)
+        if mask is not None:
+            mask = (mask > 0).astype(np.uint8)
+    else:
+        print(f"\n[Step 1] Detecting organoid with Cellpose...")
+        mask, info, ref_img = detect_organoid_cellpose(
+            video_path, n_frames=min(30, total_frames), diameter=args.diameter
+        )
 
     if mask is None:
         print("[ERROR] Could not detect organoid. Exiting.")

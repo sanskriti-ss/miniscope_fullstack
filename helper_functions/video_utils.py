@@ -6,8 +6,8 @@ Load video metadata and build reference images.
 import cv2
 import numpy as np
 
-from roi_selection import extract_frame_channel
-from helper_functions.timestamps import load_timestamps_from_file
+from .roi_selection import extract_frame_channel
+from .timestamps import load_timestamps_from_file
 
 
 def _seconds_to_frame(time_sec, timestamps, fps):
@@ -62,7 +62,7 @@ def load_video_metadata(path, start_time_sec=0, end_time_sec=0, skip_first_frame
         raise RuntimeError(f"Could not open video {path}")
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
-        fps = 30.0
+        fps = 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))

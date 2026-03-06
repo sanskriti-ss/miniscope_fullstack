@@ -24,10 +24,10 @@ from scipy.signal import find_peaks
 # ---------------------------------------------------------------------------
 # Imports from existing miniscope_fullstack modules
 # ---------------------------------------------------------------------------
-from roi_selection import extract_frame_channel
-from roi_detection import detect_rois_dispatcher
-from plotting import save_roi_overlay_image, save_spike_trace_plot
-from roi_selection import preview_video_and_draw_rois
+from helper_functions.roi_selection import extract_frame_channel
+from helper_functions.roi_detection import detect_rois_dispatcher
+from helper_functions.plotting import save_roi_overlay_image, save_spike_trace_plot
+from helper_functions.roi_selection import preview_video_and_draw_rois
 from helper_functions import (
     load_video_metadata,
     build_reference_image,
@@ -211,7 +211,7 @@ def discover_videos(root_folder, min_duration_sec=2.0):
             if duration is None:
                 # fallback: assume 30 fps
                 duration = n_frames / 30.0
-                real_fps = 30.0
+                real_fps = 25.0
                 ts_arr = None
 
             if duration < min_duration_sec:

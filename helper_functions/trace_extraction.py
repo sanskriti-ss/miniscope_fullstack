@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from roi_selection import extract_frame_channel
+from .roi_selection import extract_frame_channel
 from .signal_processing import compute_f0
 
 
@@ -69,7 +69,7 @@ def extract_traces(path, roi_masks, channel=1, start_frame=0, end_frame=None, ro
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
-        fps = 30.0
+        fps = 25.0
     
     # Skip to start frame
     if start_frame > 0:

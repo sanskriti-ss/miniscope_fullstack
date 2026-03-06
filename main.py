@@ -12,14 +12,14 @@ import matplotlib.pyplot as plt
 # Import configuration variables
 from vars import *
 # Import ROI detection strategies
-from roi_detection import detect_rois_dispatcher
+from helper_functions.roi_detection import detect_rois_dispatcher
 # Import plotting functions
-from plotting import (save_roi_overlay_image, save_trace_plot,
+from helper_functions.plotting import (save_roi_overlay_image, save_trace_plot,
                      save_smoothed_trace_plot, save_wave_trace_plot,
                      save_spike_trace_plot, save_spike_trend_plot,
-                     save_detrended_trace_plot)
+                     save_spike_trend_plot_poster, save_detrended_trace_plot)
 # Import shared ROI selection functions
-from roi_selection import preview_video_and_draw_rois, extract_frame_channel
+from helper_functions.roi_selection import preview_video_and_draw_rois, extract_frame_channel
 # Import helper functions
 from helper_functions import (
     load_timestamps_from_file,
@@ -166,6 +166,10 @@ def main():
     # 6e. Smoothed trend with raw overlay and spike/dip markers
     save_spike_trend_plot(clip_df(df), out_path=os.path.join(out_dir, "fluorescence_spikes_trend.png"),
                           video_name=os.path.basename(VIDEO_PATH))
+
+    # 6f. Poster-friendly version (10s, large fonts, 2:1 aspect)
+    save_spike_trend_plot_poster(clip_df(df), out_path=os.path.join(out_dir, "fluorescence_spikes_poster.png"),
+                                 video_name=os.path.basename(VIDEO_PATH), clip_sec=10)
 
 
     # 7. Plot F/F0 vs time

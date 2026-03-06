@@ -9,6 +9,28 @@ import matplotlib.pyplot as plt
 import re
 
 
+# Experiment-to-color mapping for consistent poster styling
+EXPERIMENT_COLORS = {
+    "control": ("#999999", "#cccccc"),  # grey: (trend, raw)
+    "thar":    ("#2E8B57", "#90d4aa"),  # green
+    "quan":    ("#2E6DB4", "#7fb3e0"),  # blue
+    "dof":     ("#7B2D8E", "#c490d4"),  # purple
+}
+
+
+def get_experiment_colors(video_name):
+    """
+    Return (trend_color, raw_color) based on keywords in the video filename.
+    Falls back to control (grey) if no drug keyword matches.
+    """
+    if video_name:
+        name_lower = video_name.lower()
+        for key in ("thar", "dof", "quan"):
+            if key in name_lower:
+                return EXPERIMENT_COLORS[key]
+    return EXPERIMENT_COLORS["control"]
+
+
 def save_roi_overlay_image(
     video_path: str,
     roi_masks,
@@ -423,10 +445,11 @@ def save_spike_trace_plot(df, out_path="fluorescence_spikes.png", video_name=Non
 
 
 def save_spike_trend_plot(df, out_path="fluorescence_spikes_trend.png", video_name=None,
-                          smooth_window_sec=0.3, smooth_polyorder=2):
+                          smooth_window_sec=0.15, smooth_polyorder=2):
     """
     Plots raw fluorescence trace faded in the background with a smoothed trend
     overlaid on top. Spikes and dips are detected and marked on the smooth curve.
+    Colors are automatically chosen based on the experiment name.
 
     Parameters
     ----------
@@ -442,6 +465,8 @@ def save_spike_trend_plot(df, out_path="fluorescence_spikes_trend.png", video_na
         Polynomial order for Savitzky-Golay smoothing of the trend
     """
     from scipy.signal import savgol_filter, find_peaks
+
+    trend_color, raw_color = get_experiment_colors(video_name)
 
     roi_cols = [c for c in df.columns if re.match(r"FF0_roi\d+$", c)]
 
@@ -481,10 +506,10 @@ def save_spike_trend_plot(df, out_path="fluorescence_spikes_trend.png", video_na
             smoothed[mask] = savgol_filter(raw[mask], win, smooth_polyorder)
 
         # Plot raw trace faded in background
-        ax.plot(time, raw, color='#7fb3e0', linewidth=0.8, alpha=0.45, label='Raw F/F0')
+        ax.plot(time, raw, color=raw_color, linewidth=0.8, alpha=0.45, label='Raw F/F0')
 
         # Plot smoothed trend on top
-        ax.plot(time, smoothed, color='#1a5fa1', linewidth=2, alpha=0.95, label='Smoothed trend')
+        ax.plot(time, smoothed, color=trend_color, linewidth=2, alpha=0.95, label='Smoothed trend')
 
         # Detect peaks and dips on the smoothed curve
         signal_range = np.percentile(smoothed[mask], 95) - np.percentile(smoothed[mask], 5)
@@ -520,6 +545,98 @@ def save_spike_trend_plot(df, out_path="fluorescence_spikes_trend.png", video_na
     plt.close()
 
     print(f"Saved spike trend plot to {out_path}")
+
+
+def save_spike_trend_plot_poster(df, out_path="fluorescence_spikes_poster.png", video_name=None,
+                                  smooth_window_sec=0.15, smooth_polyorder=2,
+                                  clip_sec=10):
+    """
+    Poster-friendly version of the spike trend plot.
+    - Clips to first `clip_sec` seconds
+    - Larger fonts for readability at a distance
+    - 2:1 aspect ratio figure
+    - Colors automatically chosen based on experiment name
+    """
+    from scipy.signal import savgol_filter, find_peaks
+
+    trend_color, raw_color = get_experiment_colors(video_name)
+
+    roi_cols = [c for c in df.columns if re.match(r"FF0_roi\d+$", c)]
+    if len(roi_cols) == 0:
+        raise ValueError("No FF0 columns found in dataframe")
+
+    # Clip to first N seconds
+    time = df["time_s"].values
+    clip_mask = time <= clip_sec
+    time = time[clip_mask]
+
+    # Estimate fps
+    if len(time) > 1:
+        dt = np.median(np.diff(time))
+        fps_est = 1.0 / dt if dt > 0 else 25.0
+    else:
+        fps_est = 25.0
+
+    win = int(smooth_window_sec * fps_est)
+    if win % 2 == 0:
+        win += 1
+    win = max(5, win)
+
+    n_rois = len(roi_cols)
+    n_cols = min(3, n_rois)
+    n_rows = (n_rois + n_cols - 1) // n_cols
+
+    # 2:1 aspect ratio per subplot row
+    fig = plt.figure(figsize=(12, 4.5 * n_rows))
+
+    for idx, col in enumerate(roi_cols):
+        roi_num = col.split('_')[-1].replace('roi', '')
+        ax = plt.subplot(n_rows, n_cols, idx + 1)
+
+        raw = df[col].values[clip_mask]
+
+        mask = ~np.isnan(raw)
+        smoothed = raw.copy()
+        if np.sum(mask) >= win:
+            smoothed[mask] = savgol_filter(raw[mask], win, smooth_polyorder)
+
+        ax.plot(time, raw, color=raw_color, linewidth=1.0, alpha=0.45, label='Raw F/F0')
+        ax.plot(time, smoothed, color=trend_color, linewidth=2.5, alpha=0.95, label='Smoothed trend')
+
+        signal_range = np.percentile(smoothed[mask], 95) - np.percentile(smoothed[mask], 5)
+        prominence = max(0.002, signal_range * 0.25)
+        min_distance = max(1, int(0.4 * fps_est))
+
+        peaks, _ = find_peaks(smoothed, distance=min_distance, prominence=prominence)
+        dips, _ = find_peaks(-smoothed, distance=min_distance, prominence=prominence)
+
+        if len(peaks) > 0:
+            ax.scatter(time[peaks], smoothed[peaks], color='red', s=60,
+                      marker='^', alpha=0.9, label=f'Spikes ({len(peaks)})', zorder=5)
+        if len(dips) > 0:
+            ax.scatter(time[dips], smoothed[dips], color='green', s=60,
+                      marker='v', alpha=0.9, label=f'Dips ({len(dips)})', zorder=5)
+
+        ax.set_xlabel("Time (s)", fontsize=18)
+        ax.set_ylabel("F/F0", fontsize=18)
+        ax.set_title(f"ROI {roi_num} - Calcium Transients (Smoothed)", fontsize=20, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=14)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=15)
+
+    if video_name:
+        fig.suptitle(video_name, fontsize=22, fontweight='bold')
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
+    else:
+        plt.tight_layout()
+
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved poster spike trend plot to {out_path}")
 
 
 def save_detrended_trace_plot(df, out_path="fluorescence_traces_detrended.png"):

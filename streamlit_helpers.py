@@ -55,17 +55,17 @@ def run_fluorescence_pipeline(video_path, config, progress_callback=None):
         # the new values in modules that were already loaded.  We force a
         # reimport of roi_detection so its module-level globals refresh.
         import importlib
-        import roi_detection as roi_mod
+        import helper_functions.roi_detection as roi_mod
         importlib.reload(roi_mod)
 
-        from roi_detection import detect_rois_dispatcher
-        from plotting import (
+        from helper_functions.roi_detection import detect_rois_dispatcher
+        from helper_functions.plotting import (
             save_roi_overlay_image, save_trace_plot,
             save_smoothed_trace_plot, save_wave_trace_plot,
             save_spike_trace_plot, save_debug_f0_trace_plot,
             save_detrended_trace_plot,
         )
-        from roi_selection import extract_frame_channel
+        from helper_functions.roi_selection import extract_frame_channel
         from helper_functions import (
             load_timestamps_from_file,
             apply_timestamps_to_traces,
@@ -299,7 +299,7 @@ def run_group_visualization(plots_dir, segment_duration=4.0):
     -------
     dict  with keys: html_path, normalized_html_path, csv_path, summary (str)
     """
-    from group_vis import (
+    from scripts.group_vis import (
         process_experiment_folder,
         print_summary,
         save_plot_data_csv,
