@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+.miniscope/
+
+# Data & media
+*.csv
+*.avi
+
+# Generated plots
+*.png
+*.html
