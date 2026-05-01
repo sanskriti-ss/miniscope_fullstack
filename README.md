@@ -1,6 +1,8 @@
 # miniscope_fullstack
 
-point the repository to your miniscope files; run the code; get detailed plots and analyses of the mechanical and calcium fluorescence patterns
+Built for the data collected in collaboration with Michelle Phan, Karley Tioran, Yuqi Zhang, and Dyala Omar under the guidance of Dr. Huang and Prof. Gao from UCLA.
+
+Just point the repository to your miniscope files, run the code, and get detailed plots and analyses of the mechanical and calcium fluorescence patterns. Comparison plots are particularly useful in determining statistical significance between different groups (e.g. different drugs on cardiac organoids, infarction-modelling, etc.).
 
 How to run:
 do source .miniscope/bin/activate or the equivalent
