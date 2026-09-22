@@ -1,11 +1,14 @@
 # miniscope_fullstack
 
-point the repository to your miniscope files; run the code; get detailed plots and analyses of the mechanical and calcium fluorescence patterns
+Point the repository to your miniscope files; run the code; get detailed plots and analyses of the mechanical and calcium fluorescence patterns
 
 How to run:
-do source .miniscope/bin/activate or the equivalent
+1) Activate a virtual environment. If this doesn't work, try what works for your own system.
+source .miniscope/bin/activate
 python -m pip install -r requirements.txt
-python main.py
+* Note: if 
+
+python main.py --manual
 
 To run the streamlit (for an easier UI)
 * pip install streamlit
@@ -30,4 +33,14 @@ If you want to run it on multiple files at once:
 3) Metrics, including CD90!
 4) In multi-mode, comparative plots of your different testing conditions (different drugs, electrical pacing conditions, etc.)
 
+<<<<<<< Updated upstream
 ![Instructions here: ](plots/instructions.png)
+=======
+![DOF with ROI](plots/17_11_28_Dark_Paced_Stablized_NODRUG/upload_fluorescence_spikes.png)
+
+(This is our negative control: shows what a regular commercially-paced organoid will provide as its fluorescent transient peaks.)
+From input files that look like this:
+
+![Graphing](plots/17_11_28_Dark_Paced_Stablized_NODRUG/upload_rois_on_first_frame.png)
+* Will update with comparative fluorescence patterns for three different drugs and normal soon
+>>>>>>> Stashed changes
