@@ -1,6 +1,10 @@
 # miniscope_fullstack
 
-Point the repository to your miniscope files; run the code; get detailed plots and analyses of the mechanical and calcium fluorescence patterns
+Point the repository to your miniscope files; run the code; get detailed plots and analyses of the mechanical and calcium fluorescence patterns.
+
+Built for the data collected in collaboration with Michelle Phan, Karley Tioran, Yuqi Zhang, and Dyala Omar under the guidance of Dr. Huang and Prof. Gao from UCLA.
+
+Just point the repository to your miniscope files, run the code, and get detailed plots and analyses of the mechanical and calcium fluorescence patterns. Comparison plots are particularly useful in determining statistical significance between different groups (e.g. different drugs on cardiac organoids, infarction-modelling, etc.).
 
 How to run:
 1) Activate a virtual environment. If this doesn't work, try what works for your own system.
@@ -33,9 +37,8 @@ If you want to run it on multiple files at once:
 3) Metrics, including CD90!
 4) In multi-mode, comparative plots of your different testing conditions (different drugs, electrical pacing conditions, etc.)
 
-<<<<<<< Updated upstream
 ![Instructions here: ](plots/instructions.png)
-=======
+
 ![DOF with ROI](plots/17_11_28_Dark_Paced_Stablized_NODRUG/upload_fluorescence_spikes.png)
 
 (This is our negative control: shows what a regular commercially-paced organoid will provide as its fluorescent transient peaks.)
@@ -43,4 +46,3 @@ From input files that look like this:
 
 ![Graphing](plots/17_11_28_Dark_Paced_Stablized_NODRUG/upload_rois_on_first_frame.png)
 * Will update with comparative fluorescence patterns for three different drugs and normal soon
->>>>>>> Stashed changes
