@@ -190,67 +190,62 @@ def extract_wave_component(df, fps, low_freq=0.1, high_freq=2.0, order=3):
     return df_wave
 
 
-def detect_spikes_and_dips(df, fps, spike_threshold_std=1.5, dip_threshold_std=1.5, 
-                          spike_prominence=0.02, window_size=10):
+def detect_spikes_and_dips(df, fps, min_peak_distance_sec=0.4, prominence_fraction=0.3):
     """
-    Detect sharp spikes (rapid increases) and dips (rapid decreases) in fluorescence traces.
-    Uses derivative-based detection to capture transient events like calcium transients.
-    
+    Detect peaks (local maxima) and dips (local minima) in fluorescence traces.
+    Uses scipy.signal.find_peaks with prominence-based detection for robust results.
+
     Parameters
     ----------
     df : pd.DataFrame
         DataFrame containing time series data with FF0_roi columns
     fps : float
         Frames per second (sampling rate)
-    spike_threshold_std : float
-        Number of standard deviations above mean derivative to detect spikes
-    dip_threshold_std : float
-        Number of standard deviations below mean derivative to detect dips
-    spike_prominence : float
-        Minimum change in F/F0 to be considered a significant transient
-    window_size : int
-        Window for computing local baseline
-    
+    min_peak_distance_sec : float
+        Minimum time between consecutive peaks/dips in seconds
+    prominence_fraction : float
+        Minimum prominence as a fraction of the signal's peak-to-peak range
+        (e.g. 0.3 = peak must stand out by at least 30% of the signal range)
+
     Returns
     -------
     pd.DataFrame
         DataFrame with added spike/dip detection columns
     """
+    from scipy.signal import find_peaks
+
     df_spikes = df.copy()
-    roi_cols = [c for c in df.columns if c.startswith("FF0_roi") and "_smooth" not in c and "_wave" not in c and "_spike" not in c]
-    
+    roi_cols = [c for c in df.columns if c.startswith("FF0_roi") and "_smooth" not in c
+                and "_wave" not in c and "_spike" not in c and "_dip" not in c
+                and "_derivative" not in c and "_detrended" not in c]
+
+    min_distance = max(1, int(min_peak_distance_sec * fps))
+
     for col in roi_cols:
         data = df[col].values
-        mask = ~np.isnan(data)
-        
-        # Calculate first derivative (rate of change)
-        derivative = np.zeros_like(data)
-        derivative[1:] = np.diff(data)
-        
-        # Calculate statistics on the derivative
-        valid_deriv = derivative[mask]
-        if len(valid_deriv) > 0:
-            deriv_mean = np.mean(valid_deriv)
-            deriv_std = np.std(valid_deriv)
-            
-            # Adaptive thresholds based on the signal's variability
-            spike_threshold = deriv_mean + spike_threshold_std * deriv_std
-            dip_threshold = deriv_mean - dip_threshold_std * deriv_std
-        else:
-            spike_threshold = 0.03
-            dip_threshold = -0.03
-        
-        # Detect spikes (rapid increases)
-        spike_mask = (derivative > spike_threshold) & (derivative > spike_prominence)
-        
-        # Detect dips (rapid decreases)  
-        dip_mask = (derivative < dip_threshold) & (derivative < -spike_prominence)
-        
-        # Store spike and dip information
-        df_spikes[f"{col}_spike"] = spike_mask.astype(float)
-        df_spikes[f"{col}_dip"] = dip_mask.astype(float)
-        
-        # Create derivative trace for visualization
-        df_spikes[f"{col}_derivative"] = derivative
-    
+        valid = data[~np.isnan(data)]
+
+        if len(valid) < 3:
+            df_spikes[f"{col}_spike"] = 0.0
+            df_spikes[f"{col}_dip"] = 0.0
+            continue
+
+        # Adaptive prominence based on signal range
+        signal_range = np.percentile(valid, 95) - np.percentile(valid, 5)
+        prominence = max(0.002, signal_range * prominence_fraction)
+
+        # Detect peaks (spikes) — local maxima
+        peaks, _ = find_peaks(data, distance=min_distance, prominence=prominence)
+
+        # Detect dips (troughs) — local minima (find peaks on inverted signal)
+        dips, _ = find_peaks(-data, distance=min_distance, prominence=prominence)
+
+        spike_mask = np.zeros(len(data))
+        dip_mask = np.zeros(len(data))
+        spike_mask[peaks] = 1.0
+        dip_mask[dips] = 1.0
+
+        df_spikes[f"{col}_spike"] = spike_mask
+        df_spikes[f"{col}_dip"] = dip_mask
+
     return df_spikes

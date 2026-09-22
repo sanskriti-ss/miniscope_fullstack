@@ -82,32 +82,47 @@ def parse_folder_name(folder_name):
     name = re.sub(r"^\d{1,2}_\d{1,2}_\d{1,2}_", "", raw)
 
     # --- Extra tags ---
-    if "_firsthalfonly" in name.lower():
+    lower = name.lower()
+    if "_firsthalfonly" in lower:
         result["tags"].append("firsthalfonly")
+    if re.search(r"\bbad\b|_bad_", lower):
+        result["tags"].append("bad")
+    if "nomovement" in lower:
+        result["tags"].append("nomovement")
+    if "blinking" in lower:
+        result["tags"].append("blinking")
+    if re.search(r"spontan|spontaneous", lower):
+        result["tags"].append("spontaneous")
 
     # --- Video type (fuzzy) ---
-    lower = name.lower()
     if re.search(r"fl", lower):           # flo, fluo, fluoresent, fluorescent
         result["video_type"] = "fluorescent"
-    elif re.search(r"bright|bf", lower):
+    elif re.search(r"\bbf\b|brightfield", lower):
         result["video_type"] = "mechanical"
 
-    # --- Drug ---
-    drug_map = [
-        (r"quan", "QUAN"),
-        (r"thar", "THAR"),
-        (r"dofe?", "DOF"),
-        (r"control", "Control"),
-        (r"wash", "Wash"),
-        (r"test", "Testrun"),
-    ]
-    for pattern, label in drug_map:
-        m = re.search(pattern + r"(\d+)?", lower)
-        if m:
-            result["drug"] = label
-            if m.group(1):
-                result["condition_id"] = int(m.group(1))
-            break
+    # --- Model / condition (Diseased vs Control vs drug-treated) ---
+    m_dis = re.search(r"diseased(\d+)", lower)
+    if m_dis:
+        result["drug"] = "Diseased"
+        result["condition_id"] = int(m_dis.group(1))
+    elif re.search(r"spon[_\s-]*diseased|diseased", lower):
+        result["drug"] = "Diseased"
+    else:
+        drug_map = [
+            (r"quan", "QUAN"),
+            (r"thar", "THAR"),
+            (r"dofe?", "DOF"),
+            (r"cont(?:rol|ol)", "Control"),  # Control / Contol typo
+            (r"wash", "Wash"),
+            (r"test", "Testrun"),
+        ]
+        for pattern, label in drug_map:
+            m = re.search(pattern + r"(\d+)?", lower)
+            if m:
+                result["drug"] = label
+                if m.group(1):
+                    result["condition_id"] = int(m.group(1))
+                break
 
     # --- Concentration ---
     m_conc = re.search(r"(\d+)\s*([num])M", name, re.IGNORECASE)
@@ -115,14 +130,40 @@ def parse_folder_name(folder_name):
         result["concentration"] = m_conc.group(1) + m_conc.group(2).lower() + "M"
 
     # --- Pacing Hz ---
+    def _pacing_setting_to_hz(val):
+        """Map device pacing dial (5/10/15/20) to Hz when used without 'Hz' suffix."""
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return None
+        if v in (5, 10, 15, 20):
+            return v / 10.0
+        return v
+
     m_hz = re.search(r"([\d.]+)\s*hz", name, re.IGNORECASE)
     if m_hz:
         result["pacing_hz"] = float(m_hz.group(1))
+    else:
+        m_pacing = re.search(r"pacing[_\s-]*(\d+)", lower)
+        if m_pacing:
+            result["pacing_hz"] = _pacing_setting_to_hz(m_pacing.group(1))
+        else:
+            # e.g. Control2_15, Control3_10_5V
+            m_trail = re.search(
+                r"(?:control|contol|diseased)\d*[_\s-]+(\d+)(?:[_\s-]|$)",
+                lower,
+            )
+            if m_trail:
+                result["pacing_hz"] = _pacing_setting_to_hz(m_trail.group(1))
 
     # --- FPS ---
     m_fps = re.search(r"(\d+)\s*fps", name, re.IGNORECASE)
     if m_fps:
         result["fps"] = int(m_fps.group(1))
+
+    # Miniscope calcium recordings default to fluorescent when modality not specified
+    if result["video_type"] is None:
+        result["video_type"] = "fluorescent"
 
     return result
 
@@ -306,7 +347,39 @@ def find_best_window(signal, time, window_sec=20.0, min_window=5.0):
 # Step 3 — Pipeline Runners
 # ============================================================================
 
-def run_fluorescent(video_path, ts_path, metadata, out_dir, window_sec=20.0):
+def detect_rois_auto(video_path, start_frame, end_frame, n_frames):
+    """Try automatic ROI detection with method fallbacks for fluorescent videos."""
+    from vars import ROI_DETECTION_METHOD
+
+    methods = []
+    for m in [ROI_DETECTION_METHOD, "single_organoid", "temporal_cv", "temporal_std", "peak_frequency"]:
+        if m not in methods:
+            methods.append(m)
+
+    for method in methods:
+        print(f"  [Auto ROI] Trying method: {method}")
+        try:
+            roi_masks, roi_info, _ = detect_rois_dispatcher(
+                method=method,
+                video_path=video_path,
+                build_ref_fn=build_reference_image,
+                extract_frame_fn=extract_frame_channel,
+                channel=0,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                n_ref_frames=min(500, n_frames),
+            )
+            if len(roi_masks) > 0:
+                print(f"  [Auto ROI] Detected {len(roi_masks)} ROI(s) with {method}")
+                return roi_masks, roi_info
+        except Exception as exc:
+            print(f"  [Auto ROI] {method} failed: {exc}")
+
+    return [], []
+
+
+def run_fluorescent(video_path, ts_path, metadata, out_dir, window_sec=20.0,
+                    allow_manual=True):
     """Run fluorescent pipeline on a single video. Returns result dict."""
     os.makedirs(out_dir, exist_ok=True)
 
@@ -317,15 +390,21 @@ def run_fluorescent(video_path, ts_path, metadata, out_dir, window_sec=20.0):
     ts_arr, real_fps = _load_timestamps_miniscope(ts_path)
     fps = real_fps if real_fps else fps_ocv
 
-    # Manual ROI selection — user draws ROIs on each fluorescent video
-    print(f"  Opening manual ROI selection for: {os.path.basename(video_path)}")
+    print(f"  Processing fluorescent video: {os.path.basename(video_path)}")
     print(f"  Folder: {metadata.get('raw_name', '')}")
-    roi_masks, roi_info = preview_video_and_draw_rois(
-        video_path, n_preview_frames=150, channel=0,
-    )
+
+    if allow_manual:
+        print(f"  Opening manual ROI selection...")
+        roi_masks, roi_info = preview_video_and_draw_rois(
+            video_path, n_preview_frames=150, channel=0,
+        )
+    else:
+        roi_masks, roi_info = detect_rois_auto(
+            video_path, start_frame, end_frame, n_frames,
+        )
 
     if len(roi_masks) == 0:
-        print(f"  [WARN] No ROIs drawn — skipping")
+        print(f"  [WARN] No ROIs detected — skipping")
         return None
 
     # Save ROI overlay
@@ -645,7 +724,7 @@ def _condition_label(r):
 
 
 def _drug_sort_key(drug):
-    order = {"Control": 0, "QUAN": 1, "THAR": 2, "DOF": 3, "Wash": 4, "Testrun": 5}
+    order = {"Control": 0, "Diseased": 1, "QUAN": 2, "THAR": 3, "DOF": 4, "Wash": 5, "Testrun": 6}
     return order.get(drug, 9)
 
 
@@ -844,6 +923,7 @@ def run_batch(root_folder, window_sec=20, out_dir="plots/batch_results",
                 result = run_fluorescent(
                     entry["video_path"], entry["ts_path"], meta,
                     vid_out, window_sec=window_sec,
+                    allow_manual=allow_manual,
                 )
                 if result:
                     result["folder"] = entry["folder_name"]
@@ -948,8 +1028,8 @@ def run_batch(root_folder, window_sec=20, out_dir="plots/batch_results",
 def main():
     parser = argparse.ArgumentParser(
         description="Batch processing pipeline for multi-video organoid analysis.")
-    parser.add_argument("--input-dir", required=True,
-                        help="Root folder containing experiment subfolders")
+    parser.add_argument("--input-dir", action="append", required=True,
+                        help="Root folder containing experiment subfolders (repeatable)")
     parser.add_argument("--window", type=float, default=20.0,
                         help="Best-window length in seconds (default 20)")
     parser.add_argument("--out-dir", default=None,
@@ -969,8 +1049,19 @@ def main():
                 n += 1
             out_dir = f"{base}{n}"
 
-    run_batch(args.input_dir, window_sec=args.window, out_dir=out_dir,
-              allow_manual=not args.no_manual)
+    input_dirs = args.input_dir
+    if len(input_dirs) == 1:
+        run_batch(input_dirs[0], window_sec=args.window, out_dir=out_dir,
+                  allow_manual=not args.no_manual)
+    else:
+        all_results = []
+        fluo_results = []
+        mech_results = []
+        for i, input_dir in enumerate(input_dirs):
+            sub_out = os.path.join(out_dir, f"batch_{i+1}_{os.path.basename(input_dir.rstrip('/'))}")
+            print(f"\n{'#' * 70}\nProcessing input dir {i+1}/{len(input_dirs)}: {input_dir}\n{'#' * 70}")
+            run_batch(input_dir, window_sec=args.window, out_dir=sub_out,
+                      allow_manual=not args.no_manual)
 
 
 if __name__ == "__main__":

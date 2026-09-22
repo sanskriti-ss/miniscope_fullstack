@@ -9,10 +9,12 @@ Modify these variables to adjust ROI detection and analysis parameters.
 
 ### "15_50_30_yuqi_pacing_Organoid3_Working_vid1.avi" ## this is good
 
-VIDEO_PATH = "/Users/sanskriti/Downloads/15_18_35_0.1nM_Thar4_Fluoresent_0.5Hz_25fps/My_V4_Miniscope/15_18_35_0.1nM_Thar4_Fluoresent_0.5Hz_25fps_vid0.avi"
+VIDEO_PATH = "input_data/15_12_31_0.1nM_Thar4_Brightfield_0.5Hz_30fps/My_V4_Miniscope/0.avi"
+# for sanskriti: 17_25_00_QUAN3_30nM_Flo_0.5Hz_25fps/17_25_00_QUAN3_30nM_Flo_0.5Hz_25fps.avi"
+# 2026_02_20//15_18_35_0.1nM_Thar4_Fluoresent_0.5Hz_25fps/My_V4_Miniscope/15_18_35_0.1nM_Thar4_Fluoresent_0.5Hz_25fps_vid0.avi
 # 2026_02_19/16_01_01_100nM_DOF1_Fluoresent_0.5Hz_25fps/My_V4_Miniscope/16_01_01_100nM_DOF1_Fluoresent_0.5Hz_25fps_vid0.avi
 # 2026_02_18/17_25_00_QUAN3_30nM_Flo_0.5Hz_25fps/My_V4_Miniscope/17_25_00_QUAN3_30nM_Flo_0.5Hz_25fps_vid0.avi"  # Path to input video file
-
+# "/Users/sanskriti/Downloads/2026_02_18/16_53_20_Control2_Flo_0.5Hz_25fps/My_V4_Miniscope/16_53_20_Control2_Flo_0.5Hz_25fps_vid0.avi"  
 # Video clipping (to ignore portions of video)
 START_TIME_SEC = 0      # Start processing at this time (seconds)
 END_TIME_SEC = 20        # End processing at this time (seconds, 0 = end of video)
